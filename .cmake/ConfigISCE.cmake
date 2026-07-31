@@ -55,7 +55,10 @@ function(CheckCXX)
 
     add_library(project_warnings INTERFACE)
     include(Warnings)
-    set_warnings(project_warnings)
+    option(ISCE3_CHECK_WARNING_FLAGS "Test-compile each warning flag before enabling it" ON)
+    if(ISCE3_CHECK_WARNING_FLAGS)
+        set_warnings(project_warnings)
+    endif()
 endfunction()
 
 
