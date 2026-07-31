@@ -250,6 +250,12 @@ runconfig:
                 enabled: False
                 # Number of lines per blocks
                 lines_per_block: 1000
+                # Optional overrides applied on top of `processing.phase_unwrap`
+                # for the ionosphere unwrap step only (e.g. different SNAPHU
+                # tiling settings than the main RUNW unwrap step). Any field
+                # left unset here inherits its value from
+                # `processing.phase_unwrap`.
+                phase_unwrap:
                 # ionosphere estimation methods
                 #(split_main_band, main_side_band, main_diff_ms_band,
                 # main_diff_low_high_subband)
