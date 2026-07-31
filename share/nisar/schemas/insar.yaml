@@ -773,6 +773,11 @@ ionosphere_phase_correction_options:
     # Unwrapping correction bool. If False, only filtering
     # is applied
     unwrap_correction: include('unwrap_correction_options', required=False)
+    # Optional overrides applied on top of `processing.phase_unwrap` for the
+    # ionosphere unwrap step only (e.g. to use different SNAPHU tiling or a
+    # different unwrapping algorithm than the main RUNW unwrap step). Any
+    # field omitted here inherits its value from `processing.phase_unwrap`.
+    phase_unwrap: include('phase_unwrap_options', required=False)
 
 dispersive_filter_options:
     # Boolean flag to enable/disable ionosphere phase correction

@@ -32,7 +32,8 @@ from nisar.products.readers import SLC
 from nisar.products.utils import (deepcopy_runconfig_and_keep_isce3_obj,
                                   interpret_subswath_mask)
 from nisar.workflows import (crossmul, filter_interferogram, h5_prep,
-                             prepare_insar_hdf5, resample_slc_v2, unwrap)
+                             helpers, prepare_insar_hdf5, resample_slc_v2,
+                             unwrap)
 from nisar.workflows.compute_stats import compute_stats_real_hdf5_dataset
 from nisar.workflows.ionosphere_runconfig import InsarIonosphereRunConfig
 from nisar.workflows.yaml_argparse import YamlArgparse
@@ -766,6 +767,15 @@ def insar_ionosphere_pair(original_cfg, runw_hdf5):
     if prep_wrapped_phase_cfg['enabled'] is True and \
        unwrap_mask_type == 'subswath_mask':
         subswath_mask_enabled = True
+
+    # Apply user-supplied phase_unwrap overrides (e.g. SNAPHU tiling) for the
+    # ionosphere unwrap step only. Fields left unspecified keep the values
+    # inherited (and possibly auto-adjusted above) from the main RUNW
+    # phase_unwrap config.
+    iono_phase_unwrap_overrides = iono_args.get('phase_unwrap')
+    if iono_phase_unwrap_overrides:
+        helpers.deep_update(iono_unwrapped_cfg, iono_phase_unwrap_overrides,
+                            flag_none_is_valid=False)
 
     if iono_method in ['split_main_band', 'main_diff_low_high_subband']:
         # For split_main_band, two sub-band interferograms need to be
