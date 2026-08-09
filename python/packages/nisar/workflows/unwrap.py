@@ -335,6 +335,75 @@ def run(cfg: dict, input_hdf5: str, output_hdf5: str):
                     # Compute statistics (stats module supports isce3.io.Raster)
                     unw_raster = isce3.io.Raster(unw_raster_path)
                     compute_stats_real_data(unw_raster, unw_dataset)
+
+                elif algorithm == "cuphu":
+                    info_channel.log("Unwrapping with cuPHU (GPU)")
+                    import cuphu
+
+                    cuphu_cfg = unwrap_args["cuphu"]
+
+                    igram_array = open_raster(igram_path)
+                    coh_array = open_raster(corr_path)
+
+                    mask_array = open_raster(
+                        cuphu_cfg['mask']) if cuphu_cfg['mask'] is not None else None
+
+                    # Get effective number of looks
+                    if cuphu_cfg['nlooks'] is not None:
+                        nlooks = cuphu_cfg['nlooks']
+                    else:
+                        rg_spacing = src_h5[f"{src_freq_group_path}/interferogram/slantRangeSpacing"][()]
+                        az_spacing = src_h5[f"{src_freq_group_path}/interferogram/sceneCenterAlongTrackSpacing"][()]
+                        rg_bw = src_h5[f"{src_freq_bandwidth_group_path}/rangeBandwidth"][()]
+                        az_bw = src_h5[f"{src_freq_bandwidth_group_path}/azimuthBandwidth"][()]
+                        nlooks = get_effective_looks(ref_slc, ref_orbit, rg_spacing,
+                                                     az_spacing, rg_bw, az_bw, freq=freq)
+
+                    # ── debug: save inputs to scratch as ENVI ────────────────
+                    # Same scratch directory snaphu uses (unwrap_scratch), so
+                    # cuphu and snaphu intermediate files are side by side.
+                    _dbg = str(unwrap_scratch)
+                    write_raster(f'{_dbg}/igram',     igram_array, gdal.GDT_CFloat32)
+                    write_raster(f'{_dbg}/coherence', coh_array,   gdal.GDT_Float32)
+                    info_channel.log(
+                        f"cuphu debug inputs: shape={igram_array.shape} "
+                        f"nonzero={np.count_nonzero(igram_array)} "
+                        f"coh_mean={np.nanmean(np.abs(coh_array)):.3f} "
+                        f"nlooks={nlooks:.2f}  saved to {_dbg}"
+                    )
+                    # ─────────────────────────────────────────────────────────
+
+                    cuphu.unwrap(igram_array, coh_array, nlooks,
+                                 unw=dst_h5[unw_path],
+                                 conncomp=dst_h5[conn_comp_path],
+                                 cost=cuphu_cfg['cost_mode'],
+                                 mask=mask_array,
+                                 init=cuphu_cfg['init'],
+                                 min_conncomp_frac=cuphu_cfg['min_conncomp_frac'],
+                                 phase_grad_window=cuphu_cfg['phase_grad_window'],
+                                 ntiles=cuphu_cfg['ntiles'],
+                                 tile_overlap=cuphu_cfg['tile_overlap'],
+                                 nproc=cuphu_cfg['nproc'],
+                                 tile_cost_thresh=cuphu_cfg['tile_cost_thresh'],
+                                 min_region_size=cuphu_cfg['min_region_size'],
+                                 gpu_id=cuphu_cfg['gpu_id'])
+
+                    # ── debug: save outputs to scratch as ENVI ───────────────
+                    _unw_arr = dst_h5[unw_path][()]
+                    _cc_arr  = dst_h5[conn_comp_path][()]
+                    write_raster(f'{_dbg}/unw',      _unw_arr, gdal.GDT_Float32)
+                    write_raster(f'{_dbg}/conncomp', _cc_arr.astype(np.uint8), gdal.GDT_Byte)
+                    info_channel.log(
+                        f"cuphu debug outputs: unw nonzero={np.count_nonzero(_unw_arr)} "
+                        f"range=[{np.nanmin(_unw_arr):.2f}, {np.nanmax(_unw_arr):.2f}] "
+                        f"conncomp unique={np.unique(_cc_arr).tolist()}"
+                    )
+                    # ─────────────────────────────────────────────────────────
+
+                    # Compute statistics (stats module supports isce3.io.Raster)
+                    unw_raster = isce3.io.Raster(unw_raster_path)
+                    compute_stats_real_data(unw_raster, unw_dataset)
+
                 else:
                     err_str = f"{algorithm} is an invalid unwrapping algorithm"
                     error_channel.log(err_str)

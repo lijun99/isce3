@@ -917,6 +917,36 @@ runconfig:
                     goldstein_alpha: 0.0
                     # Goldstein FFT patch size (only used when goldstein_alpha > 0).
                     goldstein_psize: 64
+                cuphu:
+                    # Effective number of looks (same definition as snaphu.nlooks).
+                    # Auto-computed from scene geometry if not specified.
+                    nlooks:
+                    # Statistical cost mode. One of {smooth, defo}
+                    cost_mode: smooth
+                    # File path to a binary mask of valid pixels (same as snaphu.mask).
+                    mask:
+                    # Unwrapping algorithm:
+                    #   laplace — fast GPU-only Jacobi-preconditioned CG (WLSQ, recommended)
+                    #   mcf     — GPU costs + CPU minimum-cost network-flow (integer-exact)
+                    #   mst     — GPU costs + CPU minimum spanning tree (integer-exact)
+                    init: laplace
+                    # Minimum connected component size as a fraction of total pixels.
+                    min_conncomp_frac: 0.01
+                    # Sliding window (perpendicular, parallel) for averaging wrapped phase
+                    # gradients. Corresponds to SNAPHU's KPERPDPSI and KPARDPSI.
+                    phase_grad_window: [7, 7]
+                    # Number of tiles along the (row, col) directions.
+                    ntiles: [1, 1]
+                    # Pixel overlap between neighbouring tiles.
+                    tile_overlap: [0, 0]
+                    # CPU threads for parallel tile network-flow solves (mcf/mst only).
+                    nproc: 1
+                    # Cost threshold for tile reliable-region boundaries.
+                    tile_cost_thresh: 500
+                    # Minimum reliable-region size in pixels (tile mode).
+                    min_region_size: 300
+                    # CUDA device index.
+                    gpu_id: 0
                 bridge:
                     enabled: True
                     # Maximum radius used when bridging disconnected regions.

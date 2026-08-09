@@ -202,6 +202,13 @@ class RUNWWriter(L1InSARWriter):
                 cost_mode = "None"
             if unwrapping_initializer is None:
                 unwrapping_initializer = "None"
+        elif unwrapping_algorithm.lower() == "cuphu":
+            cost_mode = unwrap_cfg["cuphu"]["cost_mode"]
+            unwrapping_initializer = unwrap_cfg["cuphu"]["init"]
+            if cost_mode is None:
+                cost_mode = "None"
+            if unwrapping_initializer is None:
+                unwrapping_initializer = "None"
 
         if prep_unwrap_cfg["enabled"]:
             phase_filling = prep_unwrap_cfg["filling_method"]
