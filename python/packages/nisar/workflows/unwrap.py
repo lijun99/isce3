@@ -207,6 +207,20 @@ def run(cfg: dict, input_hdf5: str, output_hdf5: str):
                 # Run unwrapping based on user-defined algorithm
                 algorithm = unwrap_args["algorithm"]
 
+                # cuphu has no CPU-only code path, so fall back to SNAPHU
+                # rather than failing outright when GPU processing is
+                # disabled. unwrap_args["snaphu"] is independently populated
+                # by the defaults merge regardless of which algorithm is
+                # selected, so this picks up the user's own snaphu: block if
+                # they provided one, or sensible defaults otherwise -- it
+                # never reads anything from unwrap_args["cuphu"].
+                if algorithm == "cuphu" and not cfg['worker']['gpu_enabled']:
+                    info_channel.log(
+                        "cuphu requested but GPU processing is disabled "
+                        "(worker.gpu_enabled: false); falling back to SNAPHU"
+                    )
+                    algorithm = "snaphu"
+
                 if algorithm == "icu":
                     info_channel.log("Unwrapping with ICU")
                     icu_cfg = unwrap_args["icu"]
