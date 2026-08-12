@@ -935,10 +935,26 @@ runconfig:
                     # Sliding window (perpendicular, parallel) for averaging wrapped phase
                     # gradients. Corresponds to SNAPHU's KPERPDPSI and KPARDPSI.
                     phase_grad_window: [7, 7]
-                    # Number of tiles along the (row, col) directions.
-                    ntiles: [1, 1]
-                    # Pixel overlap between neighbouring tiles.
-                    tile_overlap: [0, 0]
+                    # Number of tiles along the (row, col) directions. If not specified:
+                    # single tile (1, 1) for init=mcf/mst; for init=laplace, auto-computed
+                    # to keep each tile's edge length near target_tile_size -- a single
+                    # huge tile can leave the GPU solver's iterative method unable to
+                    # converge on large scenes, silently producing whole-cycle errors over
+                    # otherwise well-correlated regions. Set explicitly (e.g. [1, 1]) to
+                    # force single-tile laplace, which is fine (and faster) for scenes
+                    # already smaller than target_tile_size.
+                    ntiles:
+                    # Pixel overlap between neighbouring tiles. If not specified: 0 for
+                    # init=mcf/mst; 64 for init=laplace (needed to register auto-computed
+                    # tiles against each other -- explicitly set to 0 only alongside an
+                    # explicit ntiles: [1, 1]).
+                    tile_overlap:
+                    # Target tile edge length in pixels, including overlap, used only to
+                    # auto-compute ntiles when init=laplace and ntiles is not specified.
+                    # Auto-computed by cuphu (1024) if not specified. Tune down for scenes
+                    # with large decorrelated features, up for speed on uniformly
+                    # well-correlated scenes.
+                    target_tile_size:
                     # CPU threads for parallel tile network-flow solves (mcf/mst only).
                     nproc: 1
                     # Cost threshold for tile reliable-region boundaries.

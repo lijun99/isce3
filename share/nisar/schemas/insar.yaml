@@ -268,6 +268,7 @@ cuphu_options:
     phase_grad_window: list(int(min=1), min=2, max=2, required=False)
     ntiles: list(int(min=1), min=2, max=2, required=False)
     tile_overlap: list(int(min=0), min=2, max=2, required=False)
+    target_tile_size: int(min=1, required=False)
     nproc: int(required=False)
     tile_cost_thresh: int(min=1, required=False)
     min_region_size: int(min=1, required=False)

@@ -207,13 +207,7 @@ def run(cfg: dict, input_hdf5: str, output_hdf5: str):
                 # Run unwrapping based on user-defined algorithm
                 algorithm = unwrap_args["algorithm"]
 
-                # cuphu has no CPU-only code path, so fall back to SNAPHU
-                # rather than failing outright when GPU processing is
-                # disabled. unwrap_args["snaphu"] is independently populated
-                # by the defaults merge regardless of which algorithm is
-                # selected, so this picks up the user's own snaphu: block if
-                # they provided one, or sensible defaults otherwise -- it
-                # never reads anything from unwrap_args["cuphu"].
+                # Fallback to snaphu when cuphu is requested but GPU is disabled
                 if algorithm == "cuphu" and not cfg['worker']['gpu_enabled']:
                     info_channel.log(
                         "cuphu requested but GPU processing is disabled "
@@ -387,6 +381,21 @@ def run(cfg: dict, input_hdf5: str, output_hdf5: str):
                     )
                     # ─────────────────────────────────────────────────────────
 
+                    # ntiles/tile_overlap/target_tile_size: leave unset (None) in the
+                    # kwargs when not explicitly configured, rather than passing
+                    # cuphu_cfg's raw (possibly-None) values -- cuphu's own defaults
+                    # differ by init method (e.g. laplace auto-tiles to avoid its GPU
+                    # solver silently failing to converge on large single-tile scenes;
+                    # mcf/mst default to a single tile), so only override them here if
+                    # the user actually set something in the runconfig.
+                    cuphu_tile_kwargs = {}
+                    if cuphu_cfg['ntiles'] is not None:
+                        cuphu_tile_kwargs['ntiles'] = cuphu_cfg['ntiles']
+                    if cuphu_cfg['tile_overlap'] is not None:
+                        cuphu_tile_kwargs['tile_overlap'] = cuphu_cfg['tile_overlap']
+                    if cuphu_cfg['target_tile_size'] is not None:
+                        cuphu_tile_kwargs['target_tile_size'] = cuphu_cfg['target_tile_size']
+
                     cuphu.unwrap(igram_array, coh_array, nlooks,
                                  unw=dst_h5[unw_path],
                                  conncomp=dst_h5[conn_comp_path],
@@ -395,12 +404,11 @@ def run(cfg: dict, input_hdf5: str, output_hdf5: str):
                                  init=cuphu_cfg['init'],
                                  min_conncomp_frac=cuphu_cfg['min_conncomp_frac'],
                                  phase_grad_window=cuphu_cfg['phase_grad_window'],
-                                 ntiles=cuphu_cfg['ntiles'],
-                                 tile_overlap=cuphu_cfg['tile_overlap'],
                                  nproc=cuphu_cfg['nproc'],
                                  tile_cost_thresh=cuphu_cfg['tile_cost_thresh'],
                                  min_region_size=cuphu_cfg['min_region_size'],
-                                 gpu_id=cuphu_cfg['gpu_id'])
+                                 gpu_id=cuphu_cfg['gpu_id'],
+                                 **cuphu_tile_kwargs)
 
                     # ── debug: save outputs to scratch as ENVI ───────────────
                     _unw_arr = dst_h5[unw_path][()]
