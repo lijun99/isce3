@@ -432,7 +432,7 @@ def run(cfg: dict, gunw_hdf5_path: str):
 
     t_all_elapsed = time.time() - t_all
     info_channel.log(
-        f"successfully ran solid earth tides in {t_all_elapsed:.3f} seconds")
+        f"successfully ran solid_earth_tides in {t_all_elapsed:.3f} seconds")
 
 if __name__ == "__main__":
 

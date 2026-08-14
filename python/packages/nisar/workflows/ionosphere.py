@@ -2587,7 +2587,7 @@ def run(cfg: dict, runw_hdf5: str):
                         slant_side=side_slant)
 
     t_all_elapsed = time.time() - t_all
-    info_channel.log("successfully ran Ionosphere in "
+    info_channel.log("successfully ran ionosphere in "
                      f"{t_all_elapsed:.3f} seconds")
 
 

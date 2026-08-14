@@ -115,7 +115,7 @@ def run(cfg: dict, resample_type: str) -> None:
                          f"{t_freq_elapsed:.3f} seconds")
 
     t_all_elapsed = perf_counter() - t_all
-    info_channel.log(f"successfully ran resample in {t_all_elapsed:.3f} seconds")
+    info_channel.log(f"successfully ran {resample_type}_resample in {t_all_elapsed:.3f} seconds")
 
 
 def resample_secondary_rslc_onto_reference(

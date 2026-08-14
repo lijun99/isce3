@@ -223,7 +223,7 @@ def run(cfg: dict, output_hdf5: str = None):
 
     t_elapsed = time.time() - t_all
     info_channel.log(
-        f"successfully ran offsets product in {t_elapsed:.3f} seconds")
+        f"successfully ran offsets_product in {t_elapsed:.3f} seconds")
 
 def set_ampcor_params(cfg, ampcor_obj):
     '''
