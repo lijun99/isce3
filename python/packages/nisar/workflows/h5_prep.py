@@ -109,6 +109,8 @@ def get_products_and_paths(cfg: dict) -> (dict, dict):
                     'ROFF': ["ROFF"],
                     'GCOV': ['GCOV'],
                     'GSLC': ['GSLC'],
+                    'RUNW_STANDALONE': ['RUNW'],
+                    'GUNW_STANDALONE': ['GUNW'],
                     }
 
     # dict keying product type to dict of product type key(s) to output(s)
