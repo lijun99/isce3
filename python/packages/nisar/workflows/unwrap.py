@@ -397,8 +397,8 @@ def run(cfg: dict, input_hdf5: str, output_hdf5: str):
                         cuphu_tile_kwargs['target_tile_size'] = cuphu_cfg['target_tile_size']
 
                     cuphu.unwrap(igram_array, coh_array, nlooks,
-                                 unw=dst_h5[unw_path],
-                                 conncomp=dst_h5[conn_comp_path],
+                                 unw=unw_dataset,
+                                 conncomp=conn_comp_dataset,
                                  cost=cuphu_cfg['cost_mode'],
                                  mask=mask_array,
                                  init=cuphu_cfg['init'],
@@ -411,8 +411,8 @@ def run(cfg: dict, input_hdf5: str, output_hdf5: str):
                                  **cuphu_tile_kwargs)
 
                     # ── debug: save outputs to scratch as ENVI ───────────────
-                    _unw_arr = dst_h5[unw_path][()]
-                    _cc_arr  = dst_h5[conn_comp_path][()]
+                    _unw_arr = unw_dataset[()]
+                    _cc_arr  = conn_comp_dataset[()]
                     write_raster(f'{_dbg}/unw',      _unw_arr, gdal.GDT_Float32)
                     write_raster(f'{_dbg}/conncomp', _cc_arr.astype(np.uint8), gdal.GDT_Byte)
                     info_channel.log(
