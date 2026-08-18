@@ -33,8 +33,10 @@ def preprocess_wrapped_igram(igram, coherence, mask=None,
         Optional binary mask (1: invalid; 0: valid) to identify invalid pixels.
         If a mask is provided, data-driven masking is not performed (other
         masking options are ignored;
-    mask_type: str, {'median_filter', 'coherence', 'water'}, optional
-        Type of mask to identify invalid pixels
+    mask_type: str or list of str, {'median_filter', 'coherence', 'water'}, optional
+        Type(s) of mask to identify invalid pixels. A single string is
+        accepted for backward compatibility and treated as a one-element
+        list.
         'median_filter':
         Compute mask of invalid pixels by thresholding the median absolute
         deviation w.r.t. the local neighborhood around each pixel.
@@ -81,6 +83,9 @@ def preprocess_wrapped_igram(igram, coherence, mask=None,
     # Extract some preprocess options
     error_channel = journal.error('unwrap.run.preprocess_wrapped_igram')
 
+    if isinstance(mask_type, str):
+        mask_type = [mask_type]
+
     # Create mask of invalid pixels
     invalid_mask = np.full(igram.shape, dtype=bool, fill_value=False)
 
@@ -90,19 +95,23 @@ def preprocess_wrapped_igram(igram, coherence, mask=None,
     # 1-2) Based on water mask
     if mask is not None:
         invalid_mask[mask == 1] = True
-    # 2) Based on InSAR correlation values
-    elif mask_type == 'coherence':
-        invalid_mask[coherence < threshold] = True
-    # 3) Based on median absolute deviation (MAD)
-    elif mask_type == 'median_filter':
-        igram_pha = np.angle(igram)
-        mad = median_absolute_deviation(igram_pha, filter_size)
-        invalid_mask[mad > threshold] = True
-    # Not a valid algorithm to mask pixels
     else:
-        err_str = f"{mask_type} is an invalid selection for mask_type"
-        error_channel.log(err_str)
-        raise ValueError(err_str)
+        matched = False
+        # 2) Based on InSAR correlation values
+        if 'coherence' in mask_type:
+            invalid_mask[coherence < threshold] = True
+            matched = True
+        # 3) Based on median absolute deviation (MAD)
+        if 'median_filter' in mask_type:
+            igram_pha = np.angle(igram)
+            mad = median_absolute_deviation(igram_pha, filter_size)
+            invalid_mask[mad > threshold] = True
+            matched = True
+        # Not a valid algorithm to mask pixels
+        if not matched:
+            err_str = f"{mask_type} is an invalid selection for mask_type"
+            error_channel.log(err_str)
+            raise ValueError(err_str)
 
     if filling_enabled:
         # Fill invalid interferogram pixels using user-defined algorithm

@@ -710,11 +710,14 @@ runconfig:
                     mask:
                         # Path to user-provided mask
                         mask_path:
-                        # Type of data-driven mask to compute. Data-driven masking
-                        # is ignored if mask_path is provided. mask_type can be:
+                        # Type of data-driven mask(s) to compute. A single value or a
+                        # list -- multiple entries are combined (union of invalid
+                        # pixels). Data-driven masking is ignored if mask_path is
+                        # provided. Entries can be:
                         # 1) median_filter: compute mask with median absolute deviation thresholding
                         # 2) coherence: compute mask with normalized InSAR coherence thresholding
                         # 3) water: extract water areas from water mask file in dynamic ancillary data
+                        # 4) subswath_mask: exclude pixels invalid in either acquisition's subswath coverage
                         mask_type: coherence
                         # buffer from the land. Unit is [km]. Buffer should be integer.
                         ocean_water_buffer: 1

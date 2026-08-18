@@ -282,7 +282,11 @@ preprocess_wrapped_phase_options:
     distance_interpolator: include('distance_interp_options', required=False)
 
 unwrap_mask_options:
-    mask_type: enum('median_filter', 'coherence', 'water', 'subswath_mask', required=False)
+    # A single value (backward compatible) or a list -- multiple entries
+    # are combined (union of invalid pixels) by the workflow.
+    mask_type: any(enum('median_filter', 'coherence', 'water', 'subswath_mask'),
+                   list(enum('median_filter', 'coherence', 'water', 'subswath_mask')),
+                   required=False)
     mask_path: str(required=False)
     ocean_water_buffer: int(min=0, max=100, required=False)
     inland_water_buffer: int(min=0, max=100, required=False)
