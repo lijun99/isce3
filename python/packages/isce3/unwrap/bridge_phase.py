@@ -7,7 +7,9 @@ import numpy as np
 from scipy.ndimage import label as nd_label
 from scipy.ndimage import (binary_erosion,
                            find_objects,
-                           binary_dilation)
+                           binary_dilation,
+                           maximum_filter,
+                           minimum_filter)
 from scipy.sparse import csgraph as csg
 from scipy.spatial import cKDTree
 from typing import Tuple, Dict, Any, List
@@ -310,7 +312,20 @@ class bridgeConnectComponent:
         if self.num_label == 0:
             return self.connDict, self.distMat
 
-        trees = [cKDTree(np.argwhere(self.labelImg == i + 1))
+        # The nearest point between two disjoint regions always lies on
+        # both regions' boundaries, so the KD-trees below only need
+        # boundary pixels, not every pixel in each region -- using full
+        # regions makes tree construction/query scale with region AREA
+        # (self.labelBound is unused here because label_boundary()'s own
+        # boundary computation is broken -- always empty -- so this is
+        # computed fresh instead of relying on it). A labeled pixel is on
+        # the boundary if its 3x3 neighborhood contains more than one
+        # label value (i.e. touches a different label or the background).
+        nbhd_max = maximum_filter(self.labelImg, size=3)
+        nbhd_min = minimum_filter(self.labelImg, size=3)
+        is_boundary = (nbhd_max != nbhd_min) & (self.labelImg > 0)
+
+        trees = [cKDTree(np.argwhere((self.labelImg == i + 1) & is_boundary))
                  for i in range(self.num_label)]
 
         for i, j in itertools.combinations(range(self.num_label), 2):
