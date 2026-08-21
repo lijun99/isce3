@@ -123,16 +123,27 @@ def label_boundary(
             label_img,
             structure=erosion_structure).astype(np.uint8)
 
-        labeled_array, _ = nd_label(label_erosion_img)
-        regions = find_objects(labeled_array)
+        # A region survives iff at least one of its ORIGINAL pixels is
+        # still foreground after erosion -- a pure survival test, so
+        # surviving regions keep their original (non-eroded) shape below;
+        # only a region with zero surviving pixels is dropped entirely.
+        #
+        # NOTE: an earlier version of this check compared
+        # label_erosion_img[region].max() (a *binary* 0/1 mask) against
+        # original label ids 1..num_label -- since that max is trivially 1
+        # for every region, the comparison silently dropped every original
+        # label except whichever one happened to be numbered 1, regardless
+        # of whether it actually survived erosion. Confirmed via a minimal
+        # repro: two solid, well-separated 1000px blobs plus one thin
+        # pruned sliver collapsed to 1 surviving region instead of 2.
+        surviving_labels = set(np.unique(label_img[label_erosion_img > 0]))
+        surviving_labels.discard(0)
 
-        if len(regions) < num_label:
+        if len(surviving_labels) < num_label:
             channel.log(
                 "Regions lost during morphological erosion operation:")
-            erosion_labels = [label_erosion_img[region].max()
-                              for region in regions]
             for i in range(1, num_label + 1):
-                if i not in erosion_labels:
+                if i not in surviving_labels:
                     label_img[label_img == i] = 0
 
     else:
@@ -195,20 +206,40 @@ def label_conn_comp(
 
     # Apply morphological erosion if specified
     if erosion_size > 0:
-        erosion_structure = np.ones((erosion_size, erosion_size), dtype=bool)
+        # NOTE: this used to be np.ones((erosion_size, erosion_size)) -- a
+        # literal erosion_size x erosion_size, non-centered square (e.g.
+        # just 2x2 for erosion_size=2). label_boundary()'s circular-SE
+        # stage below instead treats erosion_size as a RADIUS, giving a
+        # centered (2*erosion_size+1) x (2*erosion_size+1) structuring
+        # element (11x11 for the same default erosion_size=5 both stages
+        # share) -- the same parameter meant two very different erosion
+        # strengths depending on which of the two stages you looked at.
+        # Found while validating cuPHU's native bridging port: real,
+        # irregularly-shaped small regions (19-71px, well above
+        # min_num_pixel) on an actual water-masked scene survived this
+        # stage's much gentler literal-size erosion but were correctly
+        # pruned by a proper radius-based one, causing a real behavioral
+        # mismatch. Now consistent with label_boundary's convention.
+        erosion_structure = np.ones(
+            (2 * erosion_size + 1, 2 * erosion_size + 1), dtype=bool)
         label_erosion_img = binary_erosion(
             label_img > 0,
             structure=erosion_structure).astype(np.uint8)
 
-        labeled_array, _ = nd_label(label_erosion_img)
-        regions = find_objects(labeled_array)
+        # A region survives iff at least one of its ORIGINAL pixels is
+        # still foreground after erosion -- a pure survival test, so
+        # surviving regions keep their original (non-eroded) shape below;
+        # only a region with zero surviving pixels is dropped entirely.
+        # See label_boundary()'s identical fix above for the bug this
+        # replaces (comparing a trivial binary-mask max against original
+        # label ids silently dropped every region but one).
+        surviving_labels = set(np.unique(label_img[label_erosion_img > 0]))
+        surviving_labels.discard(0)
 
-        if len(regions) < num_label:
+        if len(surviving_labels) < num_label:
             channel.log("Regions lost during morphological erosion operation:")
-            erosion_labels = [label_erosion_img[region].max()
-                              for region in regions]
             for i in range(1, num_label + 1):
-                if i not in erosion_labels:
+                if i not in surviving_labels:
                     label_img[label_img == i] = 0
 
         # Re-label after erosion
@@ -251,8 +282,14 @@ class bridgeConnectComponent:
         """
         channel = journal.info(
             "isce3.unwrap.bridge_phase.bridgeConnectComponent")
+        # NOTE: erosion_size was previously not forwarded here, so this
+        # stage silently always used label_conn_comp's own default (5)
+        # regardless of what the caller passed to label_boundary below --
+        # found alongside the erosion_labels comparison bug (see
+        # label_conn_comp's docstring/comments) while validating cuPHU's
+        # native bridging port against this reference implementation.
         self.labelImg, self.num_label = label_conn_comp(
-            self.conncomp, min_num_pixel=min_num_pixel)
+            self.conncomp, min_num_pixel=min_num_pixel, erosion_size=erosion_size)
 
         if self.num_label == 1:
             channel.log(f"Bridge algorithm is not applied because only one component exists.")

@@ -18,10 +18,14 @@ def binarize_nisar_water_mask(water_distance: ArrayLike) -> np.ndarray:
     Parameters
     ----------
     water_distance : array_like
-        The input water distance map, in the format specified by the NISAR Water Mask
-        Product Specification\ [1]_. A value of 0 indicates a not-water pixel. A value
-        of 255 represents a no-data (invalid) pixel. Values in 1-200 represent water
-        pixels.
+        The input water distance map, in the format used by
+        ``dynamic_ancillary_file_group.water_mask_file`` throughout this codebase
+        (see e.g. ``nisar.workflows.unwrap``'s water-masking branch): a value of 0
+        indicates a non-water (land) pixel, or a pixel with no water proximity
+        signal. A value of 255 represents a no-data (invalid) pixel. Nonzero
+        values in 1-200 indicate a water pixel -- 1-100 for ocean water, 101-200
+        for inland water, per the distance-from-coastline/inland-water-boundary
+        convention documented in ``unwrap.py``.
 
     Returns
     -------
@@ -29,20 +33,27 @@ def binarize_nisar_water_mask(water_distance: ArrayLike) -> np.ndarray:
         Binary mask where 1 indicates a water pixel (ocean or inland water), 0
         indicates a not-water pixel, and 255 represents a no-data (invalid) pixel.
 
-    References
-    ----------
-    .. [1] J. Jung, "Water Mask Product Specification", JPL D-107710, 2024.
+    Notes
+    -----
+    This previously treated water_distance == 0 as water (per an earlier reading
+    of the NISAR Water Mask Product Specification, J. Jung, JPL D-107710, 2024) --
+    the opposite of the convention above. That was inconsistent with how
+    unwrap.py's own water-masking logic reads the same water_mask_file field
+    (there, values > a buffer are water, 0 is not), and directly contradicted an
+    independent check against a real water_mask_file raster (a desert-dominated
+    region whose values were almost entirely 0 or near-0 -- consistent only with
+    0 meaning land, not water, for a land-dominated scene). Fixed 2026-08-18.
     """
     water_distance = np.asanyarray(water_distance)
-
-    # Compute a binary mask where the value 1 represents (ocean or inland) water pixels
-    # and the value 0 represents non-water pixels.
-    water = (water_distance >= 1) & (water_distance <= 200)
 
     # Get a binary mask of invalid pixels (i.e. pixels whose value is equal to the fill
     # value of 255).
     fill_value = 255
     invalid = water_distance == fill_value
+
+    # Compute a binary mask where the value 1 represents (ocean or inland) water pixels
+    # (any nonzero, non-fill value) and the value 0 represents non-water pixels.
+    water = (water_distance != 0) & ~invalid
 
     return (water + fill_value * invalid).astype(np.uint8)
 
@@ -101,10 +112,9 @@ def binarize_and_reproject_water_mask(
     ----------
     water_distance_raster_file : path-like
         The file path or name of the input water distance map file. It must be a
-        GDAL-compatible raster file in the format specified by the NISAR Water Mask
-        Product Specification\ [1]_. A value of 0 indicates a not-water pixel. A value
-        of 255 represents a no-data (invalid) pixel. Values in 1-200 represent water
-        pixels.
+        GDAL-compatible raster file in the same format as
+        ``dynamic_ancillary_file_group.water_mask_file`` -- see
+        ``binarize_nisar_water_mask`` for the value convention.
     geo_grid : isce3.product.GeoGridParameters
         The output geocoded coordinate grid to re-project the water mask onto.
     scratch_dir : path-like or None, optional
