@@ -31,6 +31,45 @@ from nisar.workflows.yaml_argparse import YamlArgparse
 from osgeo import gdal
 
 
+def _build_invalid_mask(cfg, preproc_cfg, freq, dst_h5, dst_freq_group_path):
+    """Water + subswath invalid-pixel mask (True = invalid), from
+    preprocess_wrapped_phase's mask config. Shared by the legacy
+    preprocessing path (icu/phass/snaphu) and cuphu's independent path.
+    """
+    mask = (
+        open_raster(preproc_cfg["mask"]["mask_path"])
+        if preproc_cfg["mask"]["mask_path"] is not None
+        else None)
+
+    if "water" in preproc_cfg["mask"]["mask_type"]:
+        # water_mask_file: distance from the water boundary. 0-100 =
+        # distance from coastline, 101-200 = distance from inland water.
+        water_mask_path = cfg["dynamic_ancillary_file_group"]["water_mask_file"]
+        ocean_water_buffer = preproc_cfg["mask"]["ocean_water_buffer"]
+        inland_water_buffer = preproc_cfg["mask"]["inland_water_buffer"]
+        water_distance = project_map_to_radar(cfg, water_mask_path, freq)
+        inland_water_mask = water_distance > inland_water_buffer + 100
+        ocean_water_mask = (
+            water_distance > ocean_water_buffer
+        ) & (water_distance <= 100)
+        if mask is not None:
+            mask = mask | inland_water_mask | ocean_water_mask
+        else:
+            mask = inland_water_mask | ocean_water_mask
+
+    if "subswath_mask" in preproc_cfg["mask"]["mask_type"]:
+        mask_path = f'{dst_freq_group_path}/interferogram/mask'
+        mask_layer = dst_h5[mask_path][()]
+        reference_valid, secondary_valid, _ = interpret_subswath_mask(mask_layer)
+        invalid = ~reference_valid | ~secondary_valid
+        if mask is not None:
+            mask = mask | invalid
+        else:
+            mask = invalid
+
+    return mask
+
+
 def run(cfg: dict, input_hdf5: str, output_hdf5: str):
     """
     run phase unwrapping
@@ -136,55 +175,31 @@ def run(cfg: dict, input_hdf5: str, output_hdf5: str):
                     corr_path = str(crossmul_scratch / 'coherence_rg'
                                     f'{unwrap_rg_looks}_az{unwrap_az_looks}')
 
+                # Run unwrapping based on user-defined algorithm
+                algorithm = unwrap_args["algorithm"]
+
+                # cuphu is GPU-only for now.
+                if algorithm == "cuphu" and not cfg['worker']['gpu_enabled']:
+                    err_str = (
+                        "cuphu requested but GPU processing is disabled "
+                        "(worker.gpu_enabled: false); cuphu currently "
+                        "requires a GPU"
+                    )
+                    error_channel.log(err_str)
+                    raise ValueError(err_str)
+
                 # If enabled, preprocess wrapped phase: remove invalid pixels
-                # and fill their location with a filling algorithm
+                # and fill their location with a filling algorithm. cuphu has
+                # its own independent preprocessing/bridge path below.
                 mask = None
-                if unwrap_args["preprocess_wrapped_phase"]["enabled"]:
-                    # Extract preprocessing dictionary and open arrays
+                if unwrap_args["preprocess_wrapped_phase"]["enabled"] and algorithm != "cuphu":
                     preproc_cfg = unwrap_args["preprocess_wrapped_phase"]
                     filling_enabled = preproc_cfg["filling_enabled"]
                     filling_method = preproc_cfg["filling_method"]
                     igram = open_raster(igram_path)
                     coherence = open_raster(corr_path)
-                    mask = (
-                        open_raster(preproc_cfg["mask"]["mask_path"])
-                        if preproc_cfg["mask"]["mask_path"] is not None
-                        else None)
-
-                    if "water" in preproc_cfg["mask"]["mask_type"]:
-                        # water_mask_file is expected to have distance from the boundary of the
-                        # water bodies. The values 0-100 represent the distance from the coastline
-                        # and values from 101-200 represent the distance from
-                        # inland water boundaries.
-                        water_mask_path = \
-                            cfg["dynamic_ancillary_file_group"]["water_mask_file"]
-                        ocean_water_buffer = \
-                            preproc_cfg["mask"]["ocean_water_buffer"]
-                        inland_water_buffer = \
-                            preproc_cfg["mask"]["inland_water_buffer"]
-                        water_distance = project_map_to_radar(
-                            cfg, water_mask_path, freq)
-                        # Since distance from inland water is defined from 101 to 200 in water mask file,
-                        # the value 100 needs to be added.
-                        inland_water_mask = water_distance > inland_water_buffer + 100
-                        ocean_water_mask = (
-                            water_distance > ocean_water_buffer
-                        ) & (water_distance <= 100)
-                        if mask is not None:
-                            mask = mask | inland_water_mask | ocean_water_mask
-                        else:
-                            mask = inland_water_mask | ocean_water_mask
-
-                    if "subswath_mask" in preproc_cfg["mask"]["mask_type"]:
-                        mask_path = f'{dst_freq_group_path}/interferogram/mask'
-                        mask_layer = dst_h5[mask_path][()]
-                        reference_valid, secondary_valid, _ = \
-                            interpret_subswath_mask(mask_layer)
-                        invalid = ~reference_valid | ~secondary_valid
-                        if mask is not None:
-                            mask = mask | invalid
-                        else:
-                            mask = invalid
+                    mask = _build_invalid_mask(
+                        cfg, preproc_cfg, freq, dst_h5, dst_freq_group_path)
 
                     if filling_method == "distance_interpolator":
                         distance = \
@@ -203,17 +218,6 @@ def run(cfg: dict, input_hdf5: str, output_hdf5: str):
                     # Save filtered/filled wrapped interferogram
                     igram_path = f'{unwrap_scratch}/wrapped_igram.filt'
                     write_raster(igram_path, igram_filt)
-
-                # Run unwrapping based on user-defined algorithm
-                algorithm = unwrap_args["algorithm"]
-
-                # Fallback to snaphu when cuphu is requested but GPU is disabled
-                if algorithm == "cuphu" and not cfg['worker']['gpu_enabled']:
-                    info_channel.log(
-                        "cuphu requested but GPU processing is disabled "
-                        "(worker.gpu_enabled: false); falling back to SNAPHU"
-                    )
-                    algorithm = "snaphu"
 
                 if algorithm == "icu":
                     info_channel.log("Unwrapping with ICU")
@@ -350,13 +354,19 @@ def run(cfg: dict, input_hdf5: str, output_hdf5: str):
 
                     cuphu_cfg = unwrap_args["cuphu"]
 
+                    # raw (unfiltered) igram/corr -- cuphu's own coherence-
+                    # weighted costs/conncomp filtering replace preprocess().
                     igram_array = open_raster(igram_path)
                     coh_array = open_raster(corr_path)
 
-                    mask_array = open_raster(
-                        cuphu_cfg['mask']) if cuphu_cfg['mask'] is not None else None
-                    if unwrap_args["preprocess_wrapped_phase"]["enabled"] and mask is not None:
-                        mask_array = (~mask).astype(np.uint8)
+                    # Builds its own mask regardless of the enabled flag
+                    # above (an unset mask_type means "no masking").
+                    preproc_cfg = unwrap_args["preprocess_wrapped_phase"]
+                    invalid_mask = _build_invalid_mask(
+                        cfg, preproc_cfg, freq, dst_h5, dst_freq_group_path)
+                    mask_array = (
+                        (~invalid_mask).astype(np.uint8)
+                        if invalid_mask is not None else None)
 
                     # Get effective number of looks
                     if cuphu_cfg['nlooks'] is not None:
@@ -368,20 +378,6 @@ def run(cfg: dict, input_hdf5: str, output_hdf5: str):
                         az_bw = src_h5[f"{src_freq_bandwidth_group_path}/azimuthBandwidth"][()]
                         nlooks = get_effective_looks(ref_slc, ref_orbit, rg_spacing,
                                                      az_spacing, rg_bw, az_bw, freq=freq)
-
-                    # ── debug: save inputs to scratch as ENVI ────────────────
-                    # Same scratch directory snaphu uses (unwrap_scratch), so
-                    # cuphu and snaphu intermediate files are side by side.
-                    _dbg = str(unwrap_scratch)
-                    write_raster(f'{_dbg}/igram',     igram_array, gdal.GDT_CFloat32)
-                    write_raster(f'{_dbg}/coherence', coh_array,   gdal.GDT_Float32)
-                    info_channel.log(
-                        f"cuphu debug inputs: shape={igram_array.shape} "
-                        f"nonzero={np.count_nonzero(igram_array)} "
-                        f"coh_mean={np.nanmean(np.abs(coh_array)):.3f} "
-                        f"nlooks={nlooks:.2f}  saved to {_dbg}"
-                    )
-                    # ─────────────────────────────────────────────────────────
 
                     # ntiles/tile_overlap/target_tile_size: leave unset (None) in the
                     # kwargs when not explicitly configured, rather than passing
@@ -398,6 +394,12 @@ def run(cfg: dict, input_hdf5: str, output_hdf5: str):
                     if cuphu_cfg['target_tile_size'] is not None:
                         cuphu_tile_kwargs['target_tile_size'] = cuphu_cfg['target_tile_size']
 
+                    if cuphu_cfg['mask_pad_distance'] is not None:
+                        cuphu_tile_kwargs['mask_pad_distance'] = \
+                            cuphu_cfg['mask_pad_distance']
+
+                    # Uses cuphu's own native GPU bridge, not the external
+                    # bridge_unwrapped_phase() step below (skipped for cuphu).
                     cuphu.unwrap(igram_array, coh_array, nlooks,
                                  unw=unw_dataset,
                                  conncomp=conn_comp_dataset,
@@ -409,20 +411,16 @@ def run(cfg: dict, input_hdf5: str, output_hdf5: str):
                                  nproc=cuphu_cfg['nproc'],
                                  tile_cost_thresh=cuphu_cfg['tile_cost_thresh'],
                                  min_region_size=cuphu_cfg['min_region_size'],
+                                 single_tile_reoptimize=cuphu_cfg['single_tile_reoptimize'],
+                                 fix_cycle_spikes=cuphu_cfg['fix_cycle_spikes'],
                                  gpu_id=cuphu_cfg['gpu_id'],
+                                 bridge=bridge_cfg['enabled'],
+                                 bridge_radius=bridge_cfg['bridge_radius'],
+                                 bridge_min_num_pixel=bridge_cfg['bridge_minimum_samples'],
+                                 bridge_erosion_size=bridge_cfg['bridge_erosion_size'],
+                                 bridge_ramp_type=bridge_cfg['bridge_ramp_type'],
+                                 bridge_ramp_max_num_sample=int(bridge_cfg['bridge_ramp_maximum_pixel']),
                                  **cuphu_tile_kwargs)
-
-                    # ── debug: save outputs to scratch as ENVI ───────────────
-                    _unw_arr = unw_dataset[()]
-                    _cc_arr  = conn_comp_dataset[()]
-                    write_raster(f'{_dbg}/unw',      _unw_arr, gdal.GDT_Float32)
-                    write_raster(f'{_dbg}/conncomp', _cc_arr.astype(np.uint8), gdal.GDT_Byte)
-                    info_channel.log(
-                        f"cuphu debug outputs: unw nonzero={np.count_nonzero(_unw_arr)} "
-                        f"range=[{np.nanmin(_unw_arr):.2f}, {np.nanmax(_unw_arr):.2f}] "
-                        f"conncomp unique={np.unique(_cc_arr).tolist()}"
-                    )
-                    # ─────────────────────────────────────────────────────────
 
                     # Compute statistics (stats module supports isce3.io.Raster)
                     unw_raster = isce3.io.Raster(unw_raster_path)
@@ -439,9 +437,13 @@ def run(cfg: dict, input_hdf5: str, output_hdf5: str):
                 # region to an exact integer cycle. Re-leveling that result with
                 # the generic post-process re-estimates offsets from `unw != 0`
                 # clusters and can introduce a spurious cycle slip, so run at
-                # most one of the two.
+                # most one of the two. cuphu likewise already ran bridging
+                # natively above; the external step here is only for
+                # phass/snaphu (and whirlwind when its own bridge is off).
                 bridge_enabled = bridge_cfg['enabled']
                 if algorithm == "whirlwind" and unwrap_args["whirlwind"]["bridge"]:
+                    bridge_enabled = False
+                if algorithm == "cuphu":
                     bridge_enabled = False
 
                 if bridge_enabled:

@@ -272,6 +272,9 @@ cuphu_options:
     nproc: int(required=False)
     tile_cost_thresh: int(min=1, required=False)
     min_region_size: int(min=1, required=False)
+    mask_pad_distance: int(min=0, required=False)
+    single_tile_reoptimize: bool(required=False)
+    fix_cycle_spikes: bool(required=False)
     gpu_id: int(min=0, required=False)
 
 preprocess_wrapped_phase_options:

@@ -965,6 +965,21 @@ runconfig:
                     tile_cost_thresh: 500
                     # Minimum reliable-region size in pixels (tile mode).
                     min_region_size: 300
+                    # Grow the valid mask by this many pixels before solving
+                    # (restored after). Fixes narrow valid features near a
+                    # mask boundary landing on the wrong whole-cycle branch.
+                    # Not needed for water masks (already precisely buffered
+                    # above); useful for others (e.g. subswath edges).
+                    mask_pad_distance: 0
+                    # Rerun a full-scene CPU network-flow solve after tiled
+                    # unwrapping to clean up tile-boundary artifacts (like
+                    # snaphu's option of the same name). Off by default:
+                    # newer code path, can run long on an adverse scene.
+                    single_tile_reoptimize: False
+                    # Detect and correct isolated single row/column
+                    # whole-2*pi-cycle spikes from a degenerate network-flow
+                    # solution. Cheap and narrowly targeted, on by default.
+                    fix_cycle_spikes: True
                     # CUDA device index.
                     gpu_id: 0
                 bridge:

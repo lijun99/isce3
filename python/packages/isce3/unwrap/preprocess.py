@@ -474,6 +474,17 @@ def _find_rdr2geo_paths(scratch_path, freq):
     )
 
     if not candidates:
+        # A sub-workflow (e.g. ionosphere correction) may pass its own
+        # narrower scratch_path without ever running its own rdr2geo there;
+        # the geometry doesn't depend on processing method, so check
+        # ancestor scratch directories before giving up.
+        for ancestor in scratch_path.parents:
+            x_path = ancestor / "rdr2geo" / f"freq{freq}" / "x.rdr"
+            if x_path.exists():
+                candidates = [x_path]
+                break
+
+    if not candidates:
         raise FileNotFoundError(
             f"Could not find any x.rdr under {scratch_path} "
             f"for frequency {freq}."

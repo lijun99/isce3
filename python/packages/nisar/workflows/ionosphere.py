@@ -767,6 +767,7 @@ def insar_ionosphere_pair(original_cfg, runw_hdf5):
         'phase_unwrap']['preprocess_wrapped_phase']
     unwrap_mask_type = prep_wrapped_phase_cfg['mask']['mask_type']
 
+    subswath_mask_enabled = False
     if unwrap_mask_type == 'water':
         # Either set to a default value or delete the key entirely.
         prep_wrapped_phase_cfg['enabled'] = True
