@@ -68,10 +68,31 @@ class RUNWWriter(L1InSARWriter):
         iono_cfg = self.cfg["processing"]["ionosphere_phase_correction"]
 
         if iono_cfg["enabled"]:
-            high_bandwidth = iono_cfg["split_range_spectrum"]\
-                ["high_band_bandwidth"]
-            low_bandwidth = iono_cfg["split_range_spectrum"]\
-                ["low_band_bandwidth"]
+            iono_method = iono_cfg["spectral_diversity"]
+            if iono_method in ["main_side_band", "main_diff_ms_band"]:
+                # These methods difference frequency A ("main band") against
+                # frequency B ("side band") directly, rather than splitting
+                # one frequency's own bandwidth into sub-bands -- report
+                # each frequency's own processed bandwidth, ordered by
+                # center frequency to match split_main_band's high/low
+                # convention.
+                freq_a_group = self.ref_h5py_file_obj[
+                    f"{self.ref_rslc.SwathPath}/frequencyA"]
+                freq_b_group = self.ref_h5py_file_obj[
+                    f"{self.ref_rslc.SwathPath}/frequencyB"]
+                cfreq_a = freq_a_group["processedCenterFrequency"][()]
+                cfreq_b = freq_b_group["processedCenterFrequency"][()]
+                bandwidth_a = freq_a_group["processedRangeBandwidth"][()]
+                bandwidth_b = freq_b_group["processedRangeBandwidth"][()]
+                if cfreq_a >= cfreq_b:
+                    high_bandwidth, low_bandwidth = bandwidth_a, bandwidth_b
+                else:
+                    high_bandwidth, low_bandwidth = bandwidth_b, bandwidth_a
+            else:
+                high_bandwidth = iono_cfg["split_range_spectrum"]\
+                    ["high_band_bandwidth"]
+                low_bandwidth = iono_cfg["split_range_spectrum"]\
+                    ["low_band_bandwidth"]
 
         ds_params = [
             DatasetParams(
