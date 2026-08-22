@@ -48,14 +48,27 @@ def _build_invalid_mask(cfg, preproc_cfg, freq, dst_h5, dst_freq_group_path):
         ocean_water_buffer = preproc_cfg["mask"]["ocean_water_buffer"]
         inland_water_buffer = preproc_cfg["mask"]["inland_water_buffer"]
         water_distance = project_map_to_radar(cfg, water_mask_path, freq)
-        inland_water_mask = water_distance > inland_water_buffer + 100
-        ocean_water_mask = (
-            water_distance > ocean_water_buffer
-        ) & (water_distance <= 100)
-        if mask is not None:
-            mask = mask | inland_water_mask | ocean_water_mask
-        else:
-            mask = inland_water_mask | ocean_water_mask
+
+        # Prefer cuphu's build_water_mask() (single source of truth, also
+        # used by cuphu's own independent preprocessing path below), but
+        # this function is shared with the legacy icu/phass/snaphu path,
+        # which has no cuphu (GPU-only) dependency otherwise -- fall back
+        # to the same formula inline if cuphu isn't installed.
+        try:
+            import cuphu
+            water_mask = cuphu.build_water_mask(
+                water_distance,
+                ocean_water_buffer=ocean_water_buffer,
+                inland_water_buffer=inland_water_buffer,
+            )
+        except ImportError:
+            inland_water_mask = water_distance > inland_water_buffer + 100
+            ocean_water_mask = (
+                water_distance > ocean_water_buffer
+            ) & (water_distance <= 100)
+            water_mask = inland_water_mask | ocean_water_mask
+
+        mask = water_mask if mask is None else mask | water_mask
 
     if "subswath_mask" in preproc_cfg["mask"]["mask_type"]:
         mask_path = f'{dst_freq_group_path}/interferogram/mask'
@@ -368,12 +381,16 @@ def run(cfg: dict, input_hdf5: str, output_hdf5: str):
                         (~invalid_mask).astype(np.uint8)
                         if invalid_mask is not None else None)
 
+                    # Wrapped-interferogram pixel spacing -- needed for
+                    # nlooks (if not given directly) and for converting
+                    # mask_buffer (km) to pixels below.
+                    rg_spacing = src_h5[f"{src_freq_group_path}/interferogram/slantRangeSpacing"][()]
+                    az_spacing = src_h5[f"{src_freq_group_path}/interferogram/sceneCenterAlongTrackSpacing"][()]
+
                     # Get effective number of looks
                     if cuphu_cfg['nlooks'] is not None:
                         nlooks = cuphu_cfg['nlooks']
                     else:
-                        rg_spacing = src_h5[f"{src_freq_group_path}/interferogram/slantRangeSpacing"][()]
-                        az_spacing = src_h5[f"{src_freq_group_path}/interferogram/sceneCenterAlongTrackSpacing"][()]
                         rg_bw = src_h5[f"{src_freq_bandwidth_group_path}/rangeBandwidth"][()]
                         az_bw = src_h5[f"{src_freq_bandwidth_group_path}/azimuthBandwidth"][()]
                         nlooks = get_effective_looks(ref_slc, ref_orbit, rg_spacing,
@@ -394,9 +411,25 @@ def run(cfg: dict, input_hdf5: str, output_hdf5: str):
                     if cuphu_cfg['target_tile_size'] is not None:
                         cuphu_tile_kwargs['target_tile_size'] = cuphu_cfg['target_tile_size']
 
-                    if cuphu_cfg['mask_pad_distance'] is not None:
-                        cuphu_tile_kwargs['mask_pad_distance'] = \
-                            cuphu_cfg['mask_pad_distance']
+                    # single_tile_reoptimize: default True for all init
+                    # methods -- cuphu itself no-ops this when the effective
+                    # tiling is (1, 1), so it costs nothing on already-
+                    # single-tile scenes, and is worth the cost to clean up
+                    # tile-boundary artifacts whenever tiling is used
+                    # (auto-tiled laplace, or nproc-driven tiled mcf/mst).
+                    if cuphu_cfg['single_tile_reoptimize'] is not None:
+                        single_tile_reoptimize = cuphu_cfg['single_tile_reoptimize']
+                    else:
+                        single_tile_reoptimize = True
+
+                    if cuphu_cfg['mask_buffer'] is not None:
+                        # mask_buffer (km) -> pixels: cuphu dilates by a
+                        # single isotropic pixel count, so use the finer
+                        # (smaller) of the two spacings -- conservative,
+                        # never under-buffers either direction.
+                        px_size = min(rg_spacing, az_spacing)
+                        cuphu_tile_kwargs['mask_buffer'] = int(np.ceil(
+                            cuphu_cfg['mask_buffer'] * 1000.0 / px_size))
 
                     # Uses cuphu's own native GPU bridge, not the external
                     # bridge_unwrapped_phase() step below (skipped for cuphu).
@@ -411,7 +444,7 @@ def run(cfg: dict, input_hdf5: str, output_hdf5: str):
                                  nproc=cuphu_cfg['nproc'],
                                  tile_cost_thresh=cuphu_cfg['tile_cost_thresh'],
                                  min_region_size=cuphu_cfg['min_region_size'],
-                                 single_tile_reoptimize=cuphu_cfg['single_tile_reoptimize'],
+                                 single_tile_reoptimize=single_tile_reoptimize,
                                  fix_cycle_spikes=cuphu_cfg['fix_cycle_spikes'],
                                  gpu_id=cuphu_cfg['gpu_id'],
                                  bridge=bridge_cfg['enabled'],
