@@ -1097,18 +1097,26 @@ def run_insar_workflow(iono_insar_cfg, original_dict, out_paths,
         flag indicating whether to unwrap the output
     '''
 
-    # run insar for ionosphere pairs
-    prepare_insar_hdf5.run(iono_insar_cfg)
-
-    # create symbolic links for rdr2geo
+    # Reuse the main run's rdr2geo/geo2rdr outputs via symlink, created
+    # before prepare_insar_hdf5.run() needs them (see commit message).
     sym_iono_rdr2geo_dir = os.path.abspath(
         f"{iono_insar_cfg['product_path_group']['scratch_path']}/rdr2geo")
-
     if not os.path.lexists(sym_iono_rdr2geo_dir):
         os.symlink(
             os.path.abspath(f"{original_dict['scratch_path']}/rdr2geo"),
             sym_iono_rdr2geo_dir,
             target_is_directory=True)
+
+    sym_iono_geo2rdr_dir = os.path.abspath(
+        f"{iono_insar_cfg['product_path_group']['scratch_path']}/geo2rdr")
+    if not os.path.lexists(sym_iono_geo2rdr_dir):
+        os.symlink(
+            os.path.abspath(f"{original_dict['scratch_path']}/geo2rdr"),
+            sym_iono_geo2rdr_dir,
+            target_is_directory=True)
+
+    # run insar for ionosphere pairs
+    prepare_insar_hdf5.run(iono_insar_cfg)
 
     iono_freq_pol = iono_insar_cfg['processing']['input_subset'][
                     'list_of_frequencies']
