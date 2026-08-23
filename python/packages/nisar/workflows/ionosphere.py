@@ -739,6 +739,9 @@ def insar_ionosphere_pair(original_cfg, runw_hdf5):
     runw_az_looks = iono_insar_cfg[
         'processing']['phase_unwrap']['azimuth_looks']
 
+    # Whether phase_unwrap uses different looks than crossmul (used below).
+    looks_override_applied = runw_rg_looks != 1 or runw_az_looks != 1
+
     if runw_rg_looks != 1 or runw_az_looks != 1:
         iono_insar_cfg[
             'processing']['crossmul']['range_looks'] = runw_rg_looks
@@ -919,6 +922,10 @@ def insar_ionosphere_pair(original_cfg, runw_hdf5):
             except:
                 orig_pol = []
             res_pol = [pol for pol in iono_pol if pol not in orig_pol]
+            if looks_override_applied:
+                # Existing product is at crossmul's looks, not
+                # phase_unwrap's -- force a re-run to get matching looks.
+                res_pol = iono_pol
             # update frequency and polarizations for ionosphere
             if res_pol:
                 iono_insar_cfg['processing']['input_subset'][
