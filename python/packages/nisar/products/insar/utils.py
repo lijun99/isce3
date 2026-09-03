@@ -340,6 +340,12 @@ def _get_sample_subswath_grid(subswaths, azi_idx, rg_idx):
     azi_clip = np.clip(azi_idx, 0, subswaths.length - 1)
     rg_clip = np.clip(rg_idx, 0, subswaths.width - 1)
 
+    if subswaths.num_sub_swaths == 0:
+        # No sub-swath information: consider all in-bounds samples valid
+        # and belonging to the first sub-swath (matches
+        # SubSwaths::getSampleSubSwath in SubSwaths.cpp).
+        return np.where(in_bounds, np.int64(1), np.int64(0))
+
     result = np.zeros(azi_idx.shape, dtype=np.int64)
     found = np.zeros(azi_idx.shape, dtype=bool)
     for s in range(1, subswaths.num_sub_swaths + 1):
