@@ -489,6 +489,11 @@ class _RSLCInputDataExceptionMask:
         self._block_lines = max(block_lines, self._chunk_lines)
         self._block = np.empty((0, samples), dtype=dataset.dtype)
 
+    @property
+    def dtype(self):
+        """dtype of the underlying dataset (uint8 zeros if there is none)"""
+        return self._block.dtype
+
     def _ensure(self, lo, hi):
         """
         Make lines lo..hi (inclusive) resident.
@@ -776,7 +781,7 @@ def generate_insar_mask(ref_rslc_obj,
         # To accommodate the old RSLC with uint8 inputDataExceptionMask,
         # and the valid polarization dependent mask will use the
         # subswath mask.
-        if ref_exception_mask._block.dtype == np.dtype('uint8'):
+        if ref_exception_mask.dtype == np.dtype('uint8'):
             pol_mask_row = (ref_num > 0).astype(np.uint16) << 8
         else:
             # polarization dependent mask for the reference RSLC
@@ -797,7 +802,7 @@ def generate_insar_mask(ref_rslc_obj,
         # To accommodate the old RSLC with uint8 inputDataExceptionMask,
         # and the valid polarization dependent mask will use the
         # subswath mask
-        if sec_exception_mask._block.dtype == np.dtype('uint8'):
+        if sec_exception_mask.dtype == np.dtype('uint8'):
             pol_mask_row |= (sec_num > 0).astype(np.uint16)
         else:
             # polarization dependent mask combing with the secondary RSLC
