@@ -314,64 +314,6 @@ def get_unwrapped_interferogram_dataset_shape(cfg : dict, freq : str):
 
     return igram_shape
 
-def _compute_subswath_mask_id(azi_idx,
-                              range_idx,
-                              azi_offset,
-                              range_offset,
-                              ref_subswaths,
-                              sec_subswaths):
-    """
-    Compute the subswath mask id between the reference and secondary RSLC
-    using the range and azimuth offsets by the geometric coregistration where
-    the offsets are used to compute the original azimuth and range indices of
-    the secondary RSLC.
-
-    Parameters
-    ---------
-    azi_idx : int
-        Index along the azimuth of reference RSLC starting from 0
-    range_idx: int
-        Index along the slant range of reference RSLC starting from 0
-    azi_offset: float
-        The azimuth offset between the reference and secondary RSLC
-    range_offset: float
-        The range offset between the reference and secondary RSLC
-    ref_subswaths : isce3.product.SubSwaths
-        The subswath object of the reference RSLC
-    sec_subswaths : isce3.product.SubSwaths
-        The subswath object of the secondary RSLC
-
-    Returns
-    ----------
-    subswath_mask_id : int
-        The subswath mask id
-    """
-
-    # subswath number of the reference RSLC
-    ref_subswath_num = \
-        ref_subswaths.get_sample_sub_swath(azi_idx,range_idx)
-
-    # Nearest neighbor to get the subswath number of the
-    # secondary RSLC where offsets are used to compute the original
-    # range and azimuth indices of the secondary RSLC.
-    sec_subswath_num = \
-        sec_subswaths.get_sample_sub_swath(
-            int(azi_idx+azi_offset+0.5),
-            int(range_idx+range_offset+0.5))
-
-    # Compute the subswath mask id based on the subswath number of
-    # reference and secondary RSLC. The mask id has 3 digits where
-    # the last digit is the subswath number of secondary RSLC,
-    # the second digit is the subswath number of reference RSLC,
-    # and the first digit is reserved for the land (0) or water (1).
-
-    # For example, 12 means land, subwath number of reference and secodnary
-    # RSLC are 1 and 2 respectively.
-    subswath_mask_id = \
-        int(10 * ref_subswath_num + sec_subswath_num)
-
-    return subswath_mask_id
-
 def save_to_hdf5_ds(input_file_path,
                     hdf5_ds_obj,
                     lines_per_block = 1000):
