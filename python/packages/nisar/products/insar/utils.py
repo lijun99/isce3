@@ -895,7 +895,9 @@ def extract_pol_valid_mask(pol_valid_mask, pol):
     # Map polarization to bit position (0-7) based on the standard order
     pol_to_bit = {'HH': 0, 'HV': 1, 'VH': 2, 'VV': 3,
                   'LH': 4, 'LV': 5, 'RH': 6, 'RV': 7}
-    bit_pos = pol_to_bit.get(pol, 0)
+    if pol not in pol_to_bit:
+        raise ValueError(f"unrecognized polarization '{pol}'")
+    bit_pos = pol_to_bit[pol]
 
     # Extract reference (high byte) and secondary (low byte) bits
     ref_valid = (pol_valid_mask >> (bit_pos + 8)) & 1
