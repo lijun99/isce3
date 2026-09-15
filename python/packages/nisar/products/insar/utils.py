@@ -520,10 +520,17 @@ def generate_insar_mask(ref_rslc_obj,
                         azimuth_offset_path,
                         freq,
                         azi_idx_arr,
-                        rg_idx_arr):
+                        rg_idx_arr,
+                        block_lines=200):
 
     """
     Generate the InSAR 2d array mask
+
+    Processes azi_idx_arr in row-blocks of `block_lines` rather than
+    building 2D arrays over the full (azi_idx_arr x rg_idx_arr) grid at
+    once, so peak memory is O(block_lines * len(rg_idx_arr)) instead of
+    O(len(azi_idx_arr) * len(rg_idx_arr)) -- needed since azi_idx_arr can
+    span a full-scene radar grid (tens of thousands of lines).
 
     Parameters
     ---------
@@ -541,6 +548,8 @@ def generate_insar_mask(ref_rslc_obj,
         The index array along the azimuth direction
     rg_idx_arr : np.ndarray
         The index array along the range direction
+    block_lines : int, optional
+        Number of azi_idx_arr rows processed per chunk (default: 200)
 
     Returns
     ----------
@@ -581,59 +590,67 @@ def generate_insar_mask(ref_rslc_obj,
                                                     sec_rslc_obj,
                                                     sec_swath)
 
-
-    # Pixels outside the reference radar grid get mask id 0.
-    in_grid = (
-        (azi_idx_arr >= 0) & (azi_idx_arr < ref_swath.lines))[:, None] & (
-        (rg_idx_arr >= 0) & (rg_idx_arr < ref_swath.samples))[None, :]
-
-    # Clip for safe fancy-indexing; `in_grid` masks out-of-grid pixels below.
-    azi_idx_clip = np.clip(azi_idx_arr, 0, ref_swath.lines - 1)
+    # Range indices outside the reference swath get mask id 0; clipped so
+    # the per-block fancy-indexing below stays legal.
+    rg_out_of_grid = (rg_idx_arr < 0) | (rg_idx_arr >= ref_swath.samples)
     rg_idx_clip = np.clip(rg_idx_arr, 0, ref_swath.samples - 1)
-    azi_grid, rg_grid = np.meshgrid(azi_idx_clip, rg_idx_clip, indexing='ij')
 
-    # Build the (azi_idx x rg_idx) offset grid one row at a time rather than
-    # reading the whole raster -- azi_idx_arr is typically a decimated
-    # subset, so the full raster can be far larger than what's used here.
-    range_off = np.empty((len(azi_idx_clip), len(rg_idx_clip)), dtype=np.float64)
-    azimuth_off = np.empty((len(azi_idx_clip), len(rg_idx_clip)), dtype=np.float64)
-    for out_row, in_row in enumerate(azi_idx_clip):
-        range_row = range_offset_band.ReadAsArray(0, int(in_row), ref_swath.samples, 1)[0]
-        azimuth_row = azimuth_offset_band.ReadAsArray(0, int(in_row), ref_swath.samples, 1)[0]
-        range_off[out_row, :] = range_row[rg_idx_clip]
-        azimuth_off[out_row, :] = azimuth_row[rg_idx_clip]
+    mask_id = np.zeros((len(azi_idx_arr), len(rg_idx_arr)), dtype=np.uint32)
 
-    # Reference sub-swath number for each output pixel.
-    ref_subswath_num = _get_sample_subswath_grid(ref_subswaths, azi_grid, rg_grid)
+    for start in range(0, len(azi_idx_arr), block_lines):
+        stop = min(start + block_lines, len(azi_idx_arr))
+        azi_block = azi_idx_arr[start:stop]
 
-    # Secondary sub-swath number (original's int(idx+offset+0.5) rounding).
-    sec_i_subswath = np.trunc(azi_grid + azimuth_off + 0.5).astype(np.int64)
-    sec_j_subswath = np.trunc(rg_grid + range_off + 0.5).astype(np.int64)
-    sec_subswath_num = _get_sample_subswath_grid(
-        sec_subswaths, sec_i_subswath, sec_j_subswath)
+        # Azimuth indices outside the reference swath get mask id 0.
+        azi_out_of_grid = (azi_block < 0) | (azi_block >= ref_swath.lines)
+        azi_block_clip = np.clip(azi_block, 0, ref_swath.lines - 1)
+        azi_grid, rg_grid = np.meshgrid(azi_block_clip, rg_idx_clip, indexing='ij')
 
-    subswath_mask_id = _compute_subswath_mask_id(ref_subswath_num, sec_subswath_num)
+        # Build the (azi_block x rg_idx) offset grid one row at a time
+        # rather than reading the whole raster -- azi_idx_arr is typically
+        # a decimated subset, so the full raster can be far larger than
+        # what's used here.
+        range_off = np.empty((len(azi_block_clip), len(rg_idx_clip)), dtype=np.float64)
+        azimuth_off = np.empty((len(azi_block_clip), len(rg_idx_clip)), dtype=np.float64)
+        for out_row, in_row in enumerate(azi_block_clip):
+            range_row = range_offset_band.ReadAsArray(0, int(in_row), ref_swath.samples, 1)[0]
+            azimuth_row = azimuth_offset_band.ReadAsArray(0, int(in_row), ref_swath.samples, 1)[0]
+            range_off[out_row, :] = range_row[rg_idx_clip]
+            azimuth_off[out_row, :] = azimuth_row[rg_idx_clip]
 
-    # reference RSLC input exception mask id
-    ref_exc_id = ref_input_exception_mask[azi_grid, rg_grid].astype(np.uint32) << 16
+        # Reference sub-swath number for each output pixel.
+        ref_subswath_num = _get_sample_subswath_grid(ref_subswaths, azi_grid, rg_grid)
 
-    # secondary RSLC input exception mask id
-    sec_i = np.round(azi_grid + azimuth_off).astype(np.int64)
-    sec_j = np.round(rg_grid + range_off).astype(np.int64)
-    # sec_i/sec_j can legitimately fall outside the secondary swath (e.g.
-    # near the reference swath's edges); sec_in_bounds gives those pixels 0
-    # instead of an out-of-bounds lookup, and the clip below just keeps the
-    # fancy-indexing itself valid.
-    sec_in_bounds = ((sec_i >= 0) & (sec_i < sec_swath.lines) &
-                     (sec_j >= 0) & (sec_j < sec_swath.samples))
-    sec_i_clip = np.clip(sec_i, 0, sec_swath.lines - 1)
-    sec_j_clip = np.clip(sec_j, 0, sec_swath.samples - 1)
-    sec_exc_id = np.where(
-        sec_in_bounds,
-        sec_input_exception_mask[sec_i_clip, sec_j_clip].astype(np.uint32) << 8,
-        0)
+        # Secondary sub-swath number (original's int(idx+offset+0.5) rounding).
+        sec_i_subswath = np.trunc(azi_grid + azimuth_off + 0.5).astype(np.int64)
+        sec_j_subswath = np.trunc(rg_grid + range_off + 0.5).astype(np.int64)
+        sec_subswath_num = _get_sample_subswath_grid(
+            sec_subswaths, sec_i_subswath, sec_j_subswath)
 
-    mask_id = subswath_mask_id.astype(np.uint32) | ref_exc_id | sec_exc_id
-    mask_id = np.where(in_grid, mask_id, 0)
+        subswath_mask_id = _compute_subswath_mask_id(ref_subswath_num, sec_subswath_num)
 
-    return mask_id.astype(np.uint32)
+        # reference RSLC input exception mask id
+        ref_exc_id = ref_input_exception_mask[azi_grid, rg_grid].astype(np.uint32) << 16
+
+        # secondary RSLC input exception mask id
+        sec_i = np.round(azi_grid + azimuth_off).astype(np.int64)
+        sec_j = np.round(rg_grid + range_off).astype(np.int64)
+        # sec_i/sec_j can legitimately fall outside the secondary swath (e.g.
+        # near the reference swath's edges); sec_in_bounds gives those pixels 0
+        # instead of an out-of-bounds lookup, and the clip below just keeps the
+        # fancy-indexing itself valid.
+        sec_in_bounds = ((sec_i >= 0) & (sec_i < sec_swath.lines) &
+                         (sec_j >= 0) & (sec_j < sec_swath.samples))
+        sec_i_clip = np.clip(sec_i, 0, sec_swath.lines - 1)
+        sec_j_clip = np.clip(sec_j, 0, sec_swath.samples - 1)
+        sec_exc_id = np.where(
+            sec_in_bounds,
+            sec_input_exception_mask[sec_i_clip, sec_j_clip].astype(np.uint32) << 8,
+            0)
+
+        block = subswath_mask_id.astype(np.uint32) | ref_exc_id | sec_exc_id
+        block[azi_out_of_grid, :] = 0
+        block[:, rg_out_of_grid] = 0
+        mask_id[start:stop, :] = block
+
+    return mask_id
