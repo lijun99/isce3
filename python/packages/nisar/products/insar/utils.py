@@ -494,62 +494,6 @@ def generate_dem_rdr(radar_grid_obj,
     dem_src = None
 
 
-def _subswath_numbers(subswaths,
-                      intervals,
-                      azi_idx_arr,
-                      rg_idx_arr):
-    """
-    Vectorized equivalent of SubSwaths.get_sample_sub_swath over index
-    arrays.
-
-    Returns 0 for out-of-swath samples, otherwise the 1-based number of
-    the first sub-swath whose per-line valid-sample interval
-    [start, end) contains the sample. An empty interval array claims
-    every in-bounds sample (matching the scalar API's short-circuit),
-    and a dataset without sub-swath information assigns 1 everywhere in
-    bounds.
-
-    Parameters
-    ----------
-    subswaths : isce3.product.SubSwaths
-        The subswath object of the RSLC
-    intervals : list of numpy.ndarray
-        Per-sub-swath [start, end) valid-sample interval arrays, i.e.
-        [subswaths.get_valid_samples_array(s) for s = 1..num_sub_swaths]
-    azi_idx_arr : numpy.ndarray
-        Integer azimuth indices
-    rg_idx_arr : numpy.ndarray
-        Integer slant range indices
-
-    Returns
-    ----------
-    numpy.ndarray
-        int64 sub-swath numbers, same shape as the index arrays
-    """
-    in_bounds = ((azi_idx_arr >= 0) & (azi_idx_arr < subswaths.length) &
-                 (rg_idx_arr >= 0) & (rg_idx_arr < subswaths.width))
-    numbers = np.zeros(azi_idx_arr.shape, dtype=np.int64)
-    if not intervals:
-        return np.where(in_bounds, np.int64(1), numbers)
-
-    # Clipped so the per-line gather stays legal; out-of-bounds samples
-    # are excluded through in_bounds
-    azi_gather = np.clip(azi_idx_arr, 0, subswaths.length - 1)
-    for number, interval in enumerate(intervals, start=1):
-        if interval.size == 0:
-            claimed = in_bounds
-        else:
-            claimed = (in_bounds &
-                       (rg_idx_arr >= interval[azi_gather, 0]) &
-                       (rg_idx_arr < interval[azi_gather, 1]))
-        unassigned = numbers == 0
-        numbers[unassigned & claimed] = number
-        if not unassigned.any():
-            break
-
-    return numbers
-
-
 class _RSLCInputDataExceptionMask:
     """
     Sliding-window reader for an RSLC inputDataExceptionMask dataset.
