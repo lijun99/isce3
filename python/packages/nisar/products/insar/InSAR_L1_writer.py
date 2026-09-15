@@ -332,13 +332,6 @@ class L1InSARWriter(InSARBaseWriter):
                         None,
                     ),
                     (
-                        "slantRangeOffset",
-                        np.float32,
-                        "Slant range offset",
-                        Units.meter,
-                        None,
-                    ),
-                    (
                         "validMask",
                         np.uint8,
                         f"Valid mask for the {pol} layers: bit 1 = reference (1=valid, 0=invalid), bit 0 = secondary (1=valid, 0=invalid)",
