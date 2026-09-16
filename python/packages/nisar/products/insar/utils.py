@@ -7,6 +7,7 @@ import isce3
 import journal
 import numpy as np
 from isce3.core import crop_external_orbit
+from isce3.unwrap.subswath_mask import pack_subswath_byte
 from nisar.products.readers import SLC
 from nisar.products.readers.orbit import load_orbit_from_xml
 from osgeo import gdal
@@ -769,7 +770,7 @@ def generate_insar_mask(ref_rslc_obj,
             sec_subswaths, sec_intervals,
             np.trunc(i_int + az_off + 0.5).astype(np.int64),
             np.trunc(rg_idx_int + rg_off + 0.5).astype(np.int64))
-        mask_row = (10 * ref_num + sec_num).astype(np.uint32)
+        mask_row = pack_subswath_byte(ref_num, sec_num)
 
         # Reference RSLC input exception mask bits: keep the low 8 bits,
         # then widen to uint32 before the shift so the packing is safe

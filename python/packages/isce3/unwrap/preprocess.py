@@ -1,9 +1,15 @@
 import pathlib
+
 import journal
 import numpy as np
 
 from osgeo import gdal, osr
 from scipy.ndimage import median_filter, map_coordinates
+
+from .subswath_mask import (  # noqa: F401 (re-exported for existing callers)
+    SubswathMaskCodec, DigitSubswathMaskLayout, NISAR_SUBSWATH_MASK_LAYOUT,
+    pack_subswath_byte, interpret_subswath_mask,
+)
 
 
 def preprocess_wrapped_igram(igram, coherence, mask=None,
@@ -627,48 +633,3 @@ def project_map_to_radar(cfg, input_data_path, freq):
                     prefilter=False)
 
     return output_arrays
-
-
-def interpret_subswath_mask(mask, nodata=255):
-    """
-    Interprets a subswath mask integer by decoding its digits into boolean
-    flags indicating reference validity, secondary validity, and water
-    presence.
-
-    Parameters
-    ----------
-    mask : numpy.array
-        A mask including both the input exception and subswath mask, where
-        each digit in the subswath mask represents a specific flag:
-        - Units digit (1s place): Secondary subswath mask
-            Non-zero indicates valid; zero indicates invalid.
-        - Tens digit (10s place): Reference subswath mask
-            Non-zero indicates valid; zero indicates invalid.
-        - Hundreds digit (100s place): Water presence flag.
-            Non-zero indicates presence of water; zero indicates absence.
-    nodata : int, default 255
-
-    Returns
-    -------
-    reference_valid : bool
-        True if the reference is valid (tens digit is non-zero),
-        False otherwise.
-    secondary_valid : bool
-        True if the secondary is valid (units digit is non-zero),
-        False otherwise.
-    water : bool
-        True if water is present (hundreds digit is non-zero),
-        False otherwise.
-    """
-    nd = (mask == nodata)
-    subswath_mask = np.asarray(mask & 0xFF)
-
-    secondary_valid = subswath_mask % 10 != 0
-    reference_valid = (subswath_mask // 10) % 10 != 0
-    water = (subswath_mask // 100) % 10 != 0
-
-    secondary_valid = np.where(nd, False, secondary_valid)
-    reference_valid = np.where(nd, False, reference_valid)
-    water = np.where(nd, False, water)
-
-    return reference_valid, secondary_valid, water
