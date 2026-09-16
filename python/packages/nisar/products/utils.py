@@ -4,6 +4,7 @@ import copy
 
 import journal
 import numpy as np
+from isce3.unwrap.preprocess import interpret_subswath_mask
 from numpy.typing import ArrayLike
 
 
@@ -78,52 +79,6 @@ def get_static_layers_data_access(
                                                        granule_id)
 
     return static_layers_data_access
-
-
-def interpret_subswath_mask(mask, nodata=255):
-    """
-    Interprets a subswath mask integer by decoding its digits into boolean
-    flags indicating reference validity, secondary validity, and water
-    presence.
-
-    Parameters
-    ----------
-    mask : numpy.array
-        A mask inlcuding both the input exception and subswath mask, where
-        each digit in the subswath mask represents a specific flag:
-        - Units digit (1s place): Secondary subswath mask
-            Non-zero indicates valid; zero indicates invalid.
-        - Tens digit (10s place): Reference subswath mask
-            Non-zero indicates valid; zero indicates invalid.
-        - Hundreds digit (100s place): Water presence flag.
-            Non-zero indicates presence of water; zero indicates absence.
-    nodata : int, default 255
-
-    Returns
-    -------
-    reference_valid : bool
-        True if the reference is valid (tens digit is non-zero),
-        False otherwise.
-    secondary_valid : bool
-        True if the secondary is valid (units digit is non-zero),
-        False otherwise.
-    water : bool
-        True if water is present (hundreds digit is non-zero),
-        False otherwise.
-    """
-
-    nd = (mask == nodata)
-    subswath_mask = np.asarray(mask & 0xFF)
-
-    secondary_valid = subswath_mask % 10 != 0
-    reference_valid = (subswath_mask // 10) % 10 != 0
-    water = (subswath_mask // 100) % 10 != 0
-
-    secondary_valid = np.where(nd, False, secondary_valid)
-    reference_valid = np.where(nd, False, reference_valid)
-    water = np.where(nd, False, water)
-
-    return reference_valid, secondary_valid, water
 
 
 def deepcopy_runconfig_and_keep_isce3_obj(obj):
