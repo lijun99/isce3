@@ -602,9 +602,9 @@ def get_pixel_offsets_params(cfg : dict):
     az_search : int
         Window size across azimuth
     rg_chip : int
-        Fine window size across range
+        Fine window size across range (largest among offset layers)
     az_chip : int
-        Fine window size across azimuth
+        Fine window size across azimuth (largest among offset layers)
     ovs_factor : int
         Oversampling factor
     """
@@ -622,13 +622,18 @@ def get_pixel_offsets_params(cfg : dict):
                         "skip_range", "skip_azimuth",
                         "correlation_surface_oversampling_factor"]]
 
-    rg_search, az_search, rg_chip, az_chip = \
+    rg_search, az_search = \
         [get_off_params(proc_cfg, param, is_roff,
                         pattern="layer",
                         get_min=True,) for param in \
                             ["half_search_range",
-                                "half_search_azimuth",
-                                "window_range",
+                                "half_search_azimuth"]]
+    # The offsets grid is centered on the largest window among layers
+    rg_chip, az_chip = \
+        [get_off_params(proc_cfg, param, is_roff,
+                        pattern="layer",
+                        get_max=True,) for param in \
+                            ["window_range",
                                 "window_azimuth"]]
     # Adjust margin
     margin = max(margin, np.abs(rg_gross), np.abs(az_gross))

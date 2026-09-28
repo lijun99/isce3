@@ -571,7 +571,7 @@ def prep_gslc_dataset(cfg, dst, dst_h5):
         _add_polarization_list(dst_h5, dst, common_parent_path, freq, pol_list)
 
 def get_off_params(pcfg, param_name, is_roff=False, pattern=None,
-                   get_min=False):
+                   get_min=False, get_max=False):
 
     cfg = pcfg['offsets_product'] if is_roff else pcfg['dense_offsets']
     if pattern is not None and is_roff:
@@ -582,6 +582,8 @@ def get_off_params(pcfg, param_name, is_roff=False, pattern=None,
 
     if get_min and isinstance(param, list):
        param = min(list(filter(None, param)), default=0)
+    if get_max and isinstance(param, list):
+       param = max(list(filter(None, param)), default=0)
 
     return param
 
