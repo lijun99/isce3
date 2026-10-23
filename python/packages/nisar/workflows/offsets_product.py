@@ -4,15 +4,16 @@ import time
 import isce3
 import journal
 import numpy as np
-import pycuampcor
 from isce3.io import HDF5OptimizedReader
 from nisar.products.readers import SLC
 from nisar.workflows import prepare_insar_hdf5
 from nisar.workflows.compute_stats import (compute_stats_real_data,
                                            compute_stats_real_hdf5_dataset)
-from nisar.workflows.dense_offsets import (create_empty_dataset,
+from nisar.workflows.dense_offsets import (create_ampcor,
+                                          create_empty_dataset,
+                                          get_ampcor_options,
                                           get_ampcor_slc,
-                                          get_ampcor_workflow)
+                                          read_gross_offsets)
 from nisar.workflows.helpers import (get_cfg_freq_pols,
                                      get_ground_track_velocity_product)
 from nisar.workflows.offsets_product_runconfig import OffsetsProductRunConfig
@@ -125,45 +126,30 @@ def run(cfg: dict, output_hdf5: str = None):
                 # Configure an Ampcor object for each layer
                 layers = []
                 for key in layer_keys:
-                    # Create and initialize Ampcor object
-                    if use_gpu:
-                        ampcor = pycuampcor.PyCuAmpcor()
-                        ampcor.deviceID = cfg['worker']['gpu_id']
-                    else:
-                        ampcor = pycuampcor.PyCPUAmpcor()
-                    ampcor.useMmap = 1
-
-                    # Set parameters related to reference/secondary RSLC
-                    ampcor.referenceImageName = ref_path
-                    ampcor.referenceImageHeight = ref_raster.length
-                    ampcor.referenceImageWidth = ref_raster.width
-                    ampcor.secondaryImageName = sec_path
-                    ampcor.secondaryImageHeight = sec_raster.length
-                    ampcor.secondaryImageWidth = sec_raster.width
-
-                    # Create a layer directory and set layer-dependent params
+                    # Create a layer directory
                     layer_scratch_path = out_dir / key
                     layer_scratch_path.mkdir(parents=True, exist_ok=True)
-                    lay_cfg = offs_params[key]
 
-                    # Set parameters depending on the layer
-                    ampcor.windowSizeWidth = lay_cfg['window_range']
-                    ampcor.windowSizeHeight = lay_cfg['window_azimuth']
-                    ampcor.halfSearchRangeAcross = lay_cfg[
-                            'half_search_range']
-                    ampcor.halfSearchRangeDown = lay_cfg[
-                            'half_search_azimuth']
-                    ampcor = set_ampcor_params(offs_params, ampcor)
+                    # Create the Ampcor object from the images, the output
+                    # filenames and the layer parameters
+                    ampcor = create_ampcor(
+                        use_gpu, cfg['worker']['gpu_id'],
+                        referenceImageName=ref_path,
+                        referenceImageHeight=ref_raster.length,
+                        referenceImageWidth=ref_raster.width,
+                        secondaryImageName=sec_path,
+                        secondaryImageHeight=sec_raster.length,
+                        secondaryImageWidth=sec_raster.width,
+                        offsetImageName=str(layer_scratch_path / 'dense_offsets'),
+                        grossOffsetImageName=str(layer_scratch_path / 'gross_offset'),
+                        snrImageName=str(layer_scratch_path / 'snr'),
+                        covImageName=str(layer_scratch_path / 'covariance'),
+                        peakValueImageName=str(layer_scratch_path / 'correlation_peak'),
+                        **get_ampcor_params(offs_params, offs_params[key],
+                                            ref_raster.length,
+                                            ref_raster.width))
 
                     # Create empty datasets to store Ampcor results
-                    ampcor.offsetImageName = str(
-                            layer_scratch_path / 'dense_offsets')
-                    ampcor.grossOffsetImageName = str(
-                            layer_scratch_path / 'gross_offset')
-                    ampcor.snrImageName = str(layer_scratch_path / 'snr')
-                    ampcor.covImageName = str(layer_scratch_path / 'covariance')
-                    ampcor.peakValueImageName = str(layer_scratch_path / 'correlation_peak')
-
                     create_empty_dataset(str(layer_scratch_path / 'dense_offsets'),
                                          ampcor.numberWindowAcross,
                                          ampcor.numberWindowDown, 2,
@@ -235,115 +221,77 @@ def run(cfg: dict, output_hdf5: str = None):
 def run_ampcor_layers(layers):
     '''
     Run Ampcor for several offset layers sharing the images and the
-    offsets grid
+    offsets grid, loading each chunk of the images once for all layers
     Parameters
     ----------
     layers: list of pycuampcor.PyCuAmpcor or pycuampcor.PyCPUAmpcor
         Ampcor objects (one per layer) with all parameters set
     '''
-    ampcor_cls = type(layers[0])
-    if hasattr(ampcor_cls, 'runAmpcorLayers'):
-        # Load each chunk of the images once for all layers
-        ampcor_cls.runAmpcorLayers(layers)
-    else:
-        # Older pycuampcor: run the layers one after another
-        for ampcor in layers:
-            ampcor.runAmpcor()
+    type(layers[0]).runAmpcorLayers(layers)
 
 
-def set_ampcor_params(cfg, ampcor_obj):
+def get_ampcor_params(cfg, layer_cfg, slc_lines, slc_cols):
     '''
-    Set Ampcor optional object parameters
+    Get the Ampcor parameters of an offset layer
     Parameters
     ----------
     cfg: dict
         Dictionary with user-defined Ampcor parameters
-    ampcor_obj: pycuampcor.PyCuAmpcor or pycuampcor.PyCPUAmpcor
-        Ampcor object to set members value; its window size must be
-        already set to that of the current layer
+    layer_cfg: dict
+        Dictionary with the parameters of the layer (window size and
+        search range)
+    slc_lines: int
+        Number of lines of reference RSLC
+    slc_cols: int
+        Number of columns of reference RSLC
+    Returns
+    -------
+    dict
+        Ampcor parameters, named as the properties of the Ampcor objects
     '''
-
-    error_channel = journal.error('offsets_product.set_ampcor_param')
-
-    # Set skip window
-    ampcor_obj.skipSampleAcross = cfg['skip_range']
-    ampcor_obj.skipSampleDown = cfg['skip_azimuth']
+    # Set the layer window size and search range, and the skip window
+    params = dict(windowSizeWidth=layer_cfg['window_range'],
+                  windowSizeHeight=layer_cfg['window_azimuth'],
+                  halfSearchRangeAcross=layer_cfg['half_search_range'],
+                  halfSearchRangeDown=layer_cfg['half_search_azimuth'],
+                  skipSampleAcross=cfg['skip_range'],
+                  skipSampleDown=cfg['skip_azimuth'])
 
     # Set starting pixel (layer window centered on the common grid)
     # and offset shape
-    az_start, rg_start = get_start_pixels(cfg,
-                                          ampcor_obj.windowSizeHeight,
-                                          ampcor_obj.windowSizeWidth)
-    ampcor_obj.referenceStartPixelAcrossStatic = rg_start
-    ampcor_obj.referenceStartPixelDownStatic = az_start
-    off_length, off_width = get_offsets_shape(cfg,
-                                              ampcor_obj.referenceImageHeight,
-                                              ampcor_obj.referenceImageWidth)
-    ampcor_obj.numberWindowAcross = off_width
-    ampcor_obj.numberWindowDown = off_length
+    az_start, rg_start = get_start_pixels(cfg, layer_cfg['window_azimuth'],
+                                          layer_cfg['window_range'])
+    params['referenceStartPixelAcrossStatic'] = rg_start
+    params['referenceStartPixelDownStatic'] = az_start
+    off_length, off_width = get_offsets_shape(cfg, slc_lines, slc_cols)
+    params['numberWindowAcross'] = off_width
+    params['numberWindowDown'] = off_length
 
-    # Set cross-correlation domain, oversampling factor and deramping
-    ampcor_obj.algorithm = 0 if cfg['cross_correlation_domain'] == \
-                                'frequency' else 1
-    if cfg.get('cross_correlation_workflow') is not None:
-        ampcor_obj.workflow = get_ampcor_workflow(cfg['cross_correlation_workflow'])
-    ampcor_obj.rawDataOversamplingFactor = cfg['slc_oversampling_factor']
-
-    if cfg['deramping_method'] is not None:
-        deramp = cfg['deramping_method']
-        if deramp == "magnitude":
-            ampcor_obj.derampMethod = 0
-        elif deramp == "complex":
-            ampcor_obj.derampMethod = 1
-        else: # skip deramping
-            ampcor_obj.derampMethod = 2
-
-    if cfg['deramping_axis'] is not None:
-        deramp_axis = cfg['deramping_axis']
-        if deramp_axis == "azimuth":
-            ampcor_obj.derampAxis = 0
-        elif deramp_axis == "range":
-            ampcor_obj.derampAxis = 1
-        elif deramp_axis == "both":
-            ampcor_obj.derampAxis = 2
-        else:
-            raise ValueError(f"invalid {deramp_axis=}")
-
-    ampcor_obj.corrStatWindowSize = cfg['correlation_statistics_zoom']
-    ampcor_obj.corrSurfaceZoomInWindow = cfg['correlation_surface_zoom']
-    ampcor_obj.corrSurfaceOverSamplingFactor = cfg[
+    # Set cross-correlation domain and workflow, deramping and correlation
+    # surface oversampling method, oversampling factors and zoom windows
+    params.update(get_ampcor_options(cfg))
+    params['rawDataOversamplingFactor'] = cfg['slc_oversampling_factor']
+    params['corrStatWindowSize'] = cfg['correlation_statistics_zoom']
+    params['corrSurfaceZoomInWindow'] = cfg['correlation_surface_zoom']
+    params['corrSurfaceOverSamplingFactor'] = cfg[
         'correlation_surface_oversampling_factor']
-    ampcor_obj.corrSurfaceOverSamplingMethod = 0 if \
-        cfg['correlation_surface_oversampling_method'] == 'fft' else 1
     if cfg['windows_batch_range'] is not None:
-        ampcor_obj.numberWindowAcrossInChunk = cfg['windows_batch_range']
+        params['numberWindowAcrossInChunk'] = cfg['windows_batch_range']
     if cfg['windows_batch_azimuth'] is not None:
-        ampcor_obj.numberWindowDownInChunk = cfg['windows_batch_azimuth']
+        params['numberWindowDownInChunk'] = cfg['windows_batch_azimuth']
     if cfg['cuda_streams'] is not None:
-        ampcor_obj.nStreams = cfg['cuda_streams']
+        params['nStreams'] = cfg['cuda_streams']
 
-    # Setup object parameters and check gross/variable dense offsets
-    ampcor_obj.setupParams()
-    ampcor_obj.setConstantGrossOffset(cfg['gross_offset_azimuth'],
-                                      cfg['gross_offset_range'])
-
+    # Gross offsets: constant, or one per window from a file
+    params['grossOffsetDown'] = cfg['gross_offset_azimuth']
+    params['grossOffsetAcross'] = cfg['gross_offset_range']
     if cfg['gross_offset_filepath'] is not None:
-        gross_offset = np.fromfile(cfg['gross_offset_filepath'], dtype=np.int32)
-        windows_number = ampcor_obj.numberWindowAcross * ampcor_obj.numberWindowDown
-        if gross_offset.size != 2 * windows_number:
-            err_str = "The input gross offset does not match the offsets width*length"
-            error_channel.log(err_str)
-            raise RuntimeError(err_str)
-        gross_offset = gross_offset.reshape(windows_number, 2)
-        gross_azimuth = gross_offset[:, 0]
-        gross_range = gross_offset[:, 1]
-        ampcor_obj.setVaryingGrossOffset(gross_azimuth, gross_range)
-    ampcor_obj.mergeGrossOffset = cfg['merge_gross_offset']
+        params.update(read_gross_offsets(cfg['gross_offset_filepath'],
+                                         off_length, off_width))
+    if cfg['merge_gross_offset'] is not None:
+        params['mergeGrossOffset'] = bool(cfg['merge_gross_offset'])
 
-    # Check pixel in image range
-    ampcor_obj.checkPixelInImageRange()
-
-    return ampcor_obj
+    return params
 
 
 def get_offsets_shape(cfg, slc_lines, slc_cols):
