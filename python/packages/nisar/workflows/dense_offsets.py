@@ -42,8 +42,7 @@ def get_ampcor_slc(hdf5_file, freq, pol, lines_per_block, copy_path):
     '''
     slc = SLC(hdf5file=hdf5_file)
     # pycuampcor reads float32 (complex64) datasets, not float16 (complex32)
-    if getattr(pycuampcor, 'has_hdf5', False) and \
-            not slc.is_dataset_complex32(freq, pol):
+    if pycuampcor.has_hdf5 and not slc.is_dataset_complex32(freq, pol):
         return f'HDF5:{hdf5_file}:/{slc.slcPath(freq, pol)}'
     copy_raster(hdf5_file, freq, pol, lines_per_block, copy_path,
                 file_type='ENVI')
@@ -79,14 +78,6 @@ def run(cfg: dict):
         # Set current CUDA device
         device = isce3.cuda.core.Device(cfg['worker']['gpu_id'])
         isce3.cuda.core.set_device(device)
-        ampcor = pycuampcor.PyCuAmpcor()
-        ampcor.deviceID = cfg['worker']['gpu_id']
-    else:
-        ampcor = pycuampcor.PyCPUAmpcor()
-
-    # Use memory mapping (not exposed to user but reference
-    # and secondary raster are memory-mappable)
-    ampcor.useMmap = 1
 
     # Looping over frequencies and polarizations
     t_all = time.time()
@@ -102,11 +93,9 @@ def run(cfg: dict):
             # Reference SLC: the HDF5 dataset, or a memory mappable copy
             ref_raster_str = f'HDF5:{ref_hdf5}:/{ref_slc.slcPath(freq, pol)}'
             ref_raster = isce3.io.Raster(ref_raster_str)
-            ampcor.referenceImageName = get_ampcor_slc(
+            ref_raster_path = get_ampcor_slc(
                 ref_hdf5, freq, pol, offset_params['lines_per_block'],
                 str(out_dir / 'reference.slc'))
-            ampcor.referenceImageHeight = ref_raster.length
-            ampcor.referenceImageWidth = ref_raster.width
 
             # If running insar.py, a memory mappable second raster has been
             # created in the previous step (resample slc). If secondary raster
@@ -120,20 +109,25 @@ def run(cfg: dict):
                  sec_raster_path = str(coregistered_slc_path /
                                        f'coarse_resample_slc/freq{freq}/{pol}/coregistered_secondary.slc')
             sec_raster = isce3.io.Raster(sec_raster_path)
-            ampcor.secondaryImageName = sec_raster_path
-            ampcor.secondaryImageHeight = sec_raster.length
-            ampcor.secondaryImageWidth = sec_raster.width
 
-            # Setup other dense offsets parameters
-            ampcor = set_optional_attributes(ampcor, offset_params,
-                                             ref_raster.length,
-                                             ref_raster.width)
-            # Configure output filenames. It is assumed output are flat binaries (e.g. ENVI files)
-            ampcor.offsetImageName = str(out_dir / 'dense_offsets')
-            ampcor.grossOffsetImageName = str(out_dir / 'gross_offset')
-            ampcor.snrImageName = str(out_dir / 'snr')
-            ampcor.covImageName = str(out_dir / 'covariance')
-            ampcor.peakValueImageName = str(out_dir / 'correlation_peak')
+            # Create the Ampcor object from the images, the output
+            # filenames (flat binaries, e.g. ENVI files) and the dense
+            # offsets parameters
+            ampcor = create_ampcor(
+                use_gpu, cfg['worker']['gpu_id'],
+                referenceImageName=ref_raster_path,
+                referenceImageHeight=ref_raster.length,
+                referenceImageWidth=ref_raster.width,
+                secondaryImageName=sec_raster_path,
+                secondaryImageHeight=sec_raster.length,
+                secondaryImageWidth=sec_raster.width,
+                offsetImageName=str(out_dir / 'dense_offsets'),
+                grossOffsetImageName=str(out_dir / 'gross_offset'),
+                snrImageName=str(out_dir / 'snr'),
+                covImageName=str(out_dir / 'covariance'),
+                peakValueImageName=str(out_dir / 'correlation_peak'),
+                **get_ampcor_params(offset_params, ref_raster.length,
+                                    ref_raster.width))
 
             # Create empty ENVI datasets. PyCuAmpcor will overwrite the
             # binary files. Note, use gdal to pass interleave option
@@ -160,187 +154,214 @@ def run(cfg: dict):
         f"Successfully ran dense_offsets in {t_all_elapsed:.3f} seconds")
 
 
-def set_optional_attributes(ampcor_obj, cfg, length, width):
+def create_ampcor(use_gpu, gpu_id, **params):
     '''
-    Set obj attributes to cfg values
-    Check attributes validity
+    Create an Ampcor object set up to run
+
+    Parameters
+    ----------
+    use_gpu: bool
+        Whether to use the CUDA (PyCuAmpcor) or the CPU (PyCPUAmpcor)
+        implementation
+    gpu_id: int
+        GPU device ID, if using the CUDA implementation
+    params: dict
+        Ampcor parameters (keyword arguments named as the properties of
+        the Ampcor objects), with the gross offsets grossOffsetDown and
+        grossOffsetAcross (constant, or one per window)
+
+    Returns
+    -------
+    pycuampcor.PyCuAmpcor or pycuampcor.PyCPUAmpcor
+        Ampcor object with all parameters set, ready to run
     '''
-
-    error_channel = journal.error('dense_offsets.run.set_optional_attribute')
-    if cfg['window_range'] is not None:
-        ampcor_obj.windowSizeWidth = cfg['window_range']
-
-    if cfg['window_azimuth'] is not None:
-        ampcor_obj.windowSizeHeight = cfg['window_azimuth']
-
-    if cfg['half_search_range'] is not None:
-        ampcor_obj.halfSearchRangeAcross = cfg['half_search_range']
-
-    if cfg['half_search_azimuth'] is not None:
-        ampcor_obj.halfSearchRangeDown = cfg['half_search_azimuth']
-
-    if cfg['skip_range'] is not None:
-        ampcor_obj.skipSampleAcross = cfg['skip_range']
-
-    if cfg['skip_azimuth'] is not None:
-        ampcor_obj.skipSampleDown = cfg['skip_azimuth']
-
-    if cfg['margin'] is not None:
-        margin = cfg['margin']
+    if use_gpu:
+        ampcor = pycuampcor.PyCuAmpcor(deviceID=gpu_id, **params)
     else:
-        margin = 0
+        ampcor = pycuampcor.PyCPUAmpcor(**params)
+
+    # Check pixel in image range; warns to stderr when out of range but does not abort
+    ampcor.checkPixelInImageRange()
+    return ampcor
+
+
+def get_ampcor_params(cfg, length, width):
+    '''
+    Get the Ampcor parameters from the dense offsets cfg values
+
+    Parameters
+    ----------
+    cfg: dict
+        Dictionary with user-defined dense offsets parameters
+    length: int
+        Number of lines of the reference RSLC
+    width: int
+        Number of columns of the reference RSLC
+
+    Returns
+    -------
+    dict
+        Ampcor parameters, named as the properties of the Ampcor objects;
+        the parameters not set in cfg keep the pycuampcor default values
+    '''
+    error_channel = journal.error('dense_offsets.get_ampcor_params')
+    defaults = pycuampcor.PyCPUAmpcor()
+
+    def value(key, default):
+        return default if cfg[key] is None else cfg[key]
+
+    # Window, search range and skip: the cfg values, or the defaults
+    params = dict(
+        windowSizeWidth=value('window_range', defaults.windowSizeWidth),
+        windowSizeHeight=value('window_azimuth', defaults.windowSizeHeight),
+        halfSearchRangeAcross=value('half_search_range',
+                                    defaults.halfSearchRangeAcross),
+        halfSearchRangeDown=value('half_search_azimuth',
+                                  defaults.halfSearchRangeDown),
+        skipSampleAcross=value('skip_range', defaults.skipSampleAcross),
+        skipSampleDown=value('skip_azimuth', defaults.skipSampleDown))
+
+    margin = value('margin', 0)
 
     # If gross offsets are set update margin
     if (cfg['gross_offset_range'] is not None) and (cfg['gross_offset_azimuth'] is not None):
         margin = max(margin, np.abs(cfg['gross_offset_range']),
                      np.abs(cfg['gross_offset_azimuth']))
 
-    margin_rg = 2 * margin + 2*ampcor_obj.halfSearchRangeAcross + ampcor_obj.windowSizeWidth
-    margin_az = 2 * margin + 2*ampcor_obj.halfSearchRangeDown + ampcor_obj.windowSizeHeight
+    margin_rg = 2 * margin + 2 * params['halfSearchRangeAcross'] + params['windowSizeWidth']
+    margin_az = 2 * margin + 2 * params['halfSearchRangeDown'] + params['windowSizeHeight']
 
-    ampcor_obj.referenceStartPixelAcrossStatic = cfg[
-        'start_pixel_range'] if cfg['start_pixel_range'] is not None \
-        else margin + ampcor_obj.halfSearchRangeAcross
-
-    ampcor_obj.referenceStartPixelDownStatic = cfg[
-        'start_pixel_azimuth'] if cfg['start_pixel_azimuth'] is not None \
-        else margin + ampcor_obj.halfSearchRangeDown
+    params['referenceStartPixelAcrossStatic'] = value(
+        'start_pixel_range', margin + params['halfSearchRangeAcross'])
+    params['referenceStartPixelDownStatic'] = value(
+        'start_pixel_azimuth', margin + params['halfSearchRangeDown'])
 
     if cfg['offset_width'] is not None:
-        ampcor_obj.numberWindowAcross = cfg['offset_width']
+        params['numberWindowAcross'] = cfg['offset_width']
     else:
-        offset_width = (width - margin_rg) // ampcor_obj.skipSampleAcross
+        offset_width = (width - margin_rg) // params['skipSampleAcross']
         if offset_width <= 0:
             err_str = (f"Image width ({width}) is too small for the configured parameters "
                        f"(margin_rg={margin_rg}): no valid ampcor windows fit across range.")
             error_channel.log(err_str)
             raise ValueError(err_str)
-        ampcor_obj.numberWindowAcross = offset_width
+        params['numberWindowAcross'] = offset_width
 
     if cfg['offset_length'] is not None:
-        ampcor_obj.numberWindowDown = cfg['offset_length']
+        params['numberWindowDown'] = cfg['offset_length']
     else:
-        offset_length = (length - margin_az) // ampcor_obj.skipSampleDown
+        offset_length = (length - margin_az) // params['skipSampleDown']
         if offset_length <= 0:
             err_str = (f"Image length ({length}) is too small for the configured parameters "
                        f"(margin_az={margin_az}): no valid ampcor windows fit along azimuth.")
             error_channel.log(err_str)
             raise ValueError(err_str)
-        ampcor_obj.numberWindowDown = offset_length
+        params['numberWindowDown'] = offset_length
 
-    if cfg['cross_correlation_domain'] is not None:
-        algorithm = cfg['cross_correlation_domain']
-        if algorithm == 'frequency':
-            ampcor_obj.algorithm = 0
-        elif algorithm == 'spatial':
-            ampcor_obj.algorithm = 1
-        else:
-            err_str = f"{algorithm} is not a valid cross-correlation option"
-            error_channel.log(err_str)
-            raise ValueError(err_str)
-
-    if cfg.get('cross_correlation_workflow') is not None:
-        ampcor_obj.workflow = get_ampcor_workflow(cfg['cross_correlation_workflow'])
+    params.update(get_ampcor_options(cfg))
 
     if cfg['slc_oversampling_factor'] is not None:
-        ampcor_obj.rawDataOversamplingFactor = cfg['slc_oversampling_factor']
-
-    if cfg['deramping_method'] is not None:
-        deramp = cfg['deramping_method']
-        if deramp == "magnitude":
-            ampcor_obj.derampMethod = 0
-        elif deramp == "complex":
-            ampcor_obj.derampMethod = 1
-        else: # skip deramping
-            ampcor_obj.derampMethod = 2
-
-    if cfg['deramping_axis'] is not None:
-        deramp_axis = cfg['deramping_axis']
-        if deramp_axis == "azimuth":
-            ampcor_obj.derampAxis = 0
-        elif deramp_axis == "range":
-            ampcor_obj.derampAxis = 1
-        else: # both directions
-            ampcor_obj.derampAxis = 2
+        params['rawDataOversamplingFactor'] = cfg['slc_oversampling_factor']
 
     if cfg['correlation_statistics_zoom'] is not None:
-        ampcor_obj.corrStatWindowSize = cfg['correlation_statistics_zoom']
+        params['corrStatWindowSize'] = cfg['correlation_statistics_zoom']
 
     if cfg['correlation_surface_zoom'] is not None:
-        ampcor_obj.corrSurfaceZoomInWindow = cfg['correlation_surface_zoom']
+        params['corrSurfaceZoomInWindow'] = cfg['correlation_surface_zoom']
 
     if cfg['correlation_surface_oversampling_factor'] is not None:
-        ampcor_obj.corrSurfaceOverSamplingFactor = cfg[
+        params['corrSurfaceOverSamplingFactor'] = cfg[
             'correlation_surface_oversampling_factor']
 
-    if cfg['correlation_surface_oversampling_method'] is not None:
-        method = cfg['correlation_surface_oversampling_method']
-        ampcor_obj.corrSurfaceOverSamplingMethod = 0 if method == "fft" else 1
-
     if cfg['windows_batch_range'] is not None:
-        ampcor_obj.numberWindowAcrossInChunk = cfg['windows_batch_range']
+        params['numberWindowAcrossInChunk'] = cfg['windows_batch_range']
 
     if cfg['windows_batch_azimuth'] is not None:
-        ampcor_obj.numberWindowDownInChunk = cfg['windows_batch_azimuth']
+        params['numberWindowDownInChunk'] = cfg['windows_batch_azimuth']
 
     if cfg['cuda_streams'] is not None:
-        ampcor_obj.nStreams = cfg['cuda_streams']
+        params['nStreams'] = cfg['cuda_streams']
 
-    # Setup object parameters
-    ampcor_obj.setupParams()
+    # Gross offsets: constant, or one per window from a file
     if (cfg['use_gross_offsets'] is not None) and (
             cfg['gross_offset_range'] is not None) and \
             (cfg['gross_offset_azimuth'] is not None):
-        ampcor_obj.setConstantGrossOffset(cfg['gross_offset_azimuth'],
-                                          cfg['gross_offset_range'])
+        params['grossOffsetDown'] = cfg['gross_offset_azimuth']
+        params['grossOffsetAcross'] = cfg['gross_offset_range']
 
     if cfg['gross_offset_filepath'] is not None:
-        gross_offset = np.fromfile(cfg['gross_offset_filepath'], dtype=np.int32)
-        windows_number = ampcor_obj.numberWindowAcross * ampcor_obj.numberWindowDown
-        if gross_offset.size != 2 * windows_number:
-            err_str = "The input gross offset does not match the offset width*offset length"
-            error_channel.log(err_str)
-            raise RuntimeError(err_str)
-        gross_offset = gross_offset.reshape(windows_number, 2)
-        gross_azimuth = gross_offset[:, 0]
-        gross_range = gross_offset[:, 1]
-        ampcor_obj.setVaryingGrossOffset(gross_azimuth, gross_range)
+        params.update(read_gross_offsets(cfg['gross_offset_filepath'],
+                                         params['numberWindowDown'],
+                                         params['numberWindowAcross']))
 
     # If True, add constant slant range/azimuth gross offsets to
     # estimated dense offsets (will be used to resample slc)
     if cfg['merge_gross_offset'] is not None:
-        ampcor_obj.mergeGrossOffset = 1 if cfg['merge_gross_offset'] else 0
+        params['mergeGrossOffset'] = bool(cfg['merge_gross_offset'])
 
-    # Check pixel in image range; warns to stderr when out of range but does not abort
-    ampcor_obj.checkPixelInImageRange()
-
-    return ampcor_obj
+    return params
 
 
-def get_ampcor_workflow(workflow):
+def get_ampcor_options(cfg):
     '''
-    Convert the cross-correlation workflow name to the pycuampcor option
+    Get the Ampcor options (cross-correlation domain and workflow, deramping
+    method and axis, correlation surface oversampling method) set in cfg
+
+    The options are given to pycuampcor by name: the cfg values, except for
+    the cross-correlation domain 'spatial' (pycuampcor 'time') and the
+    deramping method 'complex_no_deramp' (pycuampcor 'none')
 
     Parameters
     ----------
-    workflow: str
-        'two_pass': a first pass without anti-aliasing oversampling to
-        estimate the pixel-level offsets, and a second pass with
-        oversampling over a smaller search range; or
-        'one_pass': a single pass with anti-aliasing oversampling over the
-        whole search range (more accurate for noisy correlation surfaces)
+    cfg: dict
+        Dictionary with user-defined dense offsets or offsets product
+        parameters
 
     Returns
     -------
-    int
-        0 for 'two_pass', 1 for 'one_pass'
+    dict
+        Ampcor options, named as the properties of the Ampcor objects
     '''
-    workflows = {'two_pass': 0, 'one_pass': 1}
-    if workflow not in workflows:
-        err_str = f"{workflow} is not a valid cross-correlation workflow"
-        journal.error('dense_offsets.get_ampcor_workflow').log(err_str)
-        raise ValueError(err_str)
-    return workflows[workflow]
+    names = {'cross_correlation_domain': ('algorithm', {'spatial': 'time'}),
+             'cross_correlation_workflow': ('workflow', {}),
+             'deramping_method': ('derampMethod', {'complex_no_deramp': 'none'}),
+             'deramping_axis': ('derampAxis', {}),
+             'correlation_surface_oversampling_method':
+                 ('corrSurfaceOverSamplingMethod', {})}
+    options = {}
+    for key, (name, renamed) in names.items():
+        if cfg.get(key) is not None:
+            options[name] = renamed.get(cfg[key], cfg[key])
+    return options
+
+
+def read_gross_offsets(filepath, offset_length, offset_width):
+    '''
+    Read the gross offsets, one (azimuth, range) pair of int32 per window
+
+    Parameters
+    ----------
+    filepath: str
+        Path to the binary file of the gross offsets
+    offset_length: int
+        Number of windows in azimuth
+    offset_width: int
+        Number of windows in range
+
+    Returns
+    -------
+    dict
+        The gross offsets grossOffsetDown and grossOffsetAcross, one per window
+    '''
+    gross_offset = np.fromfile(filepath, dtype=np.int32)
+    windows_number = offset_length * offset_width
+    if gross_offset.size != 2 * windows_number:
+        err_str = "The input gross offset does not match the offset width*offset length"
+        journal.error('dense_offsets.read_gross_offsets').log(err_str)
+        raise RuntimeError(err_str)
+    gross_offset = gross_offset.reshape(windows_number, 2)
+    return dict(grossOffsetDown=gross_offset[:, 0],
+                grossOffsetAcross=gross_offset[:, 1])
 
 
 def create_empty_dataset(filename, width, length,
