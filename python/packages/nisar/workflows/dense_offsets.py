@@ -212,21 +212,18 @@ def get_ampcor_params(cfg, length, width):
         the parameters not set in cfg keep the pycuampcor default values
     '''
     error_channel = journal.error('dense_offsets.get_ampcor_params')
-    defaults = pycuampcor.PyCPUAmpcor()
 
     def value(key, default):
         return default if cfg[key] is None else cfg[key]
 
-    # Window, search range and skip: the cfg values, or the defaults
+    # Window, search range and skip (set in the runconfig defaults)
     params = dict(
-        windowSizeWidth=value('window_range', defaults.windowSizeWidth),
-        windowSizeHeight=value('window_azimuth', defaults.windowSizeHeight),
-        halfSearchRangeAcross=value('half_search_range',
-                                    defaults.halfSearchRangeAcross),
-        halfSearchRangeDown=value('half_search_azimuth',
-                                  defaults.halfSearchRangeDown),
-        skipSampleAcross=value('skip_range', defaults.skipSampleAcross),
-        skipSampleDown=value('skip_azimuth', defaults.skipSampleDown))
+        windowSizeWidth=cfg['window_range'],
+        windowSizeHeight=cfg['window_azimuth'],
+        halfSearchRangeAcross=cfg['half_search_range'],
+        halfSearchRangeDown=cfg['half_search_azimuth'],
+        skipSampleAcross=cfg['skip_range'],
+        skipSampleDown=cfg['skip_azimuth'])
 
     margin = value('margin', 0)
 
