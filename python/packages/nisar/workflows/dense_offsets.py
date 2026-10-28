@@ -19,8 +19,9 @@ from nisar.workflows.dense_offsets_runconfig import \
 
 def get_ampcor_slc(hdf5_file, freq, pol, lines_per_block, copy_path):
     '''
-    Get the RSLC image for Ampcor: the HDF5 dataset if pycuampcor can read it
-    directly, or else a memory mappable (ENVI) copy
+    Get the RSLC image for Ampcor: the HDF5 dataset, read directly by
+    pycuampcor, or a memory mappable (ENVI) complex64 copy of a complex32
+    dataset
 
     Parameters
     ----------
@@ -40,9 +41,15 @@ def get_ampcor_slc(hdf5_file, freq, pol, lines_per_block, copy_path):
     str
         The image name for Ampcor: HDF5:<file>:<dataset>, or copy_path
     '''
+    if not pycuampcor.has_hdf5:
+        err_str = ('pycuampcor is built without HDF5 support and cannot read '
+                   'the RSLC datasets; install pycuampcor with HDF5 '
+                   '(e.g., from conda-forge)')
+        journal.error('dense_offsets.get_ampcor_slc').log(err_str)
+        raise RuntimeError(err_str)
     slc = SLC(hdf5file=hdf5_file)
     # pycuampcor reads float32 (complex64) datasets, not float16 (complex32)
-    if pycuampcor.has_hdf5 and not slc.is_dataset_complex32(freq, pol):
+    if not slc.is_dataset_complex32(freq, pol):
         return f'HDF5:{hdf5_file}:/{slc.slcPath(freq, pol)}'
     copy_raster(hdf5_file, freq, pol, lines_per_block, copy_path,
                 file_type='ENVI')
